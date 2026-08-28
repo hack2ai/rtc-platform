@@ -2,45 +2,48 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     function isAuth() { return request.auth != null; }
+    function meetingExists(id) {
+      return firestore.exists(/databases/(default)/documents/meetings/$(id));
+    }
     function isMeetingMember(id) {
-      return isAuth() && (
+      return isAuth() && meetingExists(id) && (
         firestore.get(/databases/(default)/documents/meetings/$(id)).data.hostId == request.auth.uid ||
         request.auth.uid in firestore.get(/databases/(default)/documents/meetings/$(id)).data.participants
       );
     }
-    function isMeetingHost(id) {
-      return isAuth() && firestore.get(/databases/(default)/documents/meetings/$(id)).data.hostId == request.auth.uid;
+    function validUpload(maxBytes) {
+      return request.resource != null && request.resource.size < maxBytes;
     }
 
     match /users/{userId}/avatar/{file} {
       allow read: if true;
       allow write: if isAuth() && request.auth.uid == userId
-        && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+        && validUpload(5 * 1024 * 1024)
+        && request.resource.contentType.matches('image/.*');
       allow delete: if isAuth() && request.auth.uid == userId;
     }
 
     match /meetings/{meetingId}/files/{file} {
       allow read: if isMeetingMember(meetingId);
-      allow write: if isMeetingMember(meetingId)
-        && request.resource.size < 50 * 1024 * 1024
-        && request.resource.contentType != null;
+      allow create: if isMeetingMember(meetingId)
+        && validUpload(50 * 1024 * 1024)
+        && request.resource.contentType.size() > 0;
+      allow update: if isMeetingMember(meetingId)
+        && validUpload(50 * 1024 * 1024)
+        && request.resource.contentType.size() > 0;
       allow delete: if isMeetingMember(meetingId);
     }
 
     match /meetings/{meetingId}/recordings/{file} {
-      allow read: if isMeetingHost(meetingId);
-      allow write: if isMeetingHost(meetingId)
-        && request.resource.size < 1024 * 1024 * 1024
-        && request.resource.contentType != null
-        && request.resource.contentType.matches('video/.*');
-      allow delete: if isMeetingHost(meetingId);
+      allow read: if isMeetingMember(meetingId);
+      allow write: if isMeetingMember(meetingId)
+        && validUpload(500 * 1024 * 1024)
+        && request.resource.contentType.matches('video/.*|audio/.*');
+      allow delete: if isMeetingMember(meetingId);
     }
 
     match /meetings/{meetingId}/whiteboard/{file} {
-      allow read: if isMeetingMember(meetingId);
-      allow write: if isMeetingMember(meetingId) && request.resource.size < 10 * 1024 * 1024;
-      allow delete: if isMeetingMember(meetingId);
+      allow read, write, delete: if isMeetingMember(meetingId);
     }
   }
 }
