@@ -1,10 +1,15 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { authenticate } from '../middleware/auth';
-import { getNotifications, markRead, markAllRead, deleteNotification } from '../controllers/notificationController';
+import { asyncHandler } from '../middleware/errorHandler';
+import { sendError } from '../utils/response';
+
 const r = Router();
 r.use(authenticate);
-r.get('/', getNotifications);
-r.put('/read-all', markAllRead);
-r.put('/:notificationId/read', markRead);
-r.delete('/:notificationId', deleteNotification);
+const notImplemented = asyncHandler(async (_req: Request, res: Response) => {
+  sendError(res, 'Notification service is not implemented in this release', 501);
+});
+r.get('/', notImplemented);
+r.put('/read-all', notImplemented);
+r.put('/:notificationId/read', notImplemented);
+r.delete('/:notificationId', notImplemented);
 export default r;
