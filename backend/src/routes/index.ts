@@ -1,0 +1,18 @@
+import { Router } from 'express';
+import authRoutes from './auth';
+import meetingRoutes from './meetings';
+import chatRoutes from './chat';
+import fileRoutes from './files';
+import recordingRoutes from './recordings';
+import notificationRoutes from './notifications';
+import adminRoutes from './admin';
+const router = Router();
+router.use('/auth', authRoutes);
+router.use('/meetings', meetingRoutes);
+router.use('/chat', chatRoutes);
+router.use('/files', fileRoutes);
+router.use('/recordings', recordingRoutes);
+router.use('/notifications', notificationRoutes);
+router.use('/admin', adminRoutes);
+router.get('/health', (_req, res) => res.json({ status:'ok', timestamp:new Date().toISOString() }));
+export default router;
