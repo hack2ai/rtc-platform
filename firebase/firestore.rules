@@ -7,6 +7,7 @@ service cloud.firestore {
     function meetingExists(id) { return exists(/databases/$(database)/documents/meetings/$(id)); }
     function isMeetingHost(id) { return isAuth() && meetingExists(id) && get(/databases/$(database)/documents/meetings/$(id)).data.hostId == request.auth.uid; }
     function isMeetingParticipant(id) { return isAuth() && meetingExists(id) && request.auth.uid in get(/databases/$(database)/documents/meetings/$(id)).data.participants; }
+    function isMeetingMember(id) { return isMeetingHost(id) || isMeetingParticipant(id); }
 
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
@@ -14,31 +15,33 @@ service cloud.firestore {
       allow update, delete: if isOwner(userId) || isAdmin();
     }
     match /meetings/{meetingId} {
-      allow read: if isMeetingHost(meetingId) || isMeetingParticipant(meetingId) || isAdmin();
+      allow read: if isMeetingMember(meetingId) || isAdmin();
       allow create: if isAuth() && request.resource.data.hostId == request.auth.uid;
       allow update, delete: if isMeetingHost(meetingId) || isAdmin();
       match /participants/{userId} {
-        allow read: if isMeetingHost(meetingId) || isMeetingParticipant(meetingId) || isOwner(userId) || isAdmin();
-        allow create, update: if isMeetingHost(meetingId) || isOwner(userId) || isAdmin();
+        allow read: if isMeetingMember(meetingId) || isOwner(userId) || isAdmin();
+        allow create: if isMeetingHost(meetingId) || isOwner(userId) || isAdmin();
+        allow update: if isMeetingHost(meetingId) || (isOwner(userId) && request.resource.data.uid == userId);
         allow delete: if isMeetingHost(meetingId) || isOwner(userId) || isAdmin();
       }
       match /signaling/{signalId} {
-        allow read, create: if isMeetingParticipant(meetingId) || isMeetingHost(meetingId);
+        allow read: if isMeetingMember(meetingId) && resource.data.targetId == request.auth.uid;
+        allow create: if isMeetingMember(meetingId) && request.resource.data.senderId == request.auth.uid && request.resource.data.targetId != request.auth.uid && request.resource.data.targetId in get(/databases/$(database)/documents/meetings/$(meetingId)).data.participants;
         allow delete: if isMeetingHost(meetingId) || isAdmin();
       }
       match /whiteboard/{actionId} {
-        allow read, create: if isMeetingParticipant(meetingId) || isMeetingHost(meetingId);
+        allow read, create: if isMeetingMember(meetingId);
         allow delete: if isMeetingHost(meetingId) || isAdmin();
       }
     }
     match /messages/{messageId} {
-      allow read: if isMeetingParticipant(resource.data.meetingId) || isMeetingHost(resource.data.meetingId) || isAdmin();
-      allow create: if (isMeetingParticipant(request.resource.data.meetingId) || isMeetingHost(request.resource.data.meetingId)) && isOwner(request.resource.data.senderId);
+      allow read: if isMeetingMember(resource.data.meetingId) || isAdmin();
+      allow create: if isMeetingMember(request.resource.data.meetingId) && isOwner(request.resource.data.senderId);
       allow update, delete: if isOwner(resource.data.senderId) || isAdmin();
     }
     match /files/{fileId} {
-      allow read: if isMeetingParticipant(resource.data.meetingId) || isMeetingHost(resource.data.meetingId) || isAdmin();
-      allow create: if (isMeetingParticipant(request.resource.data.meetingId) || isMeetingHost(request.resource.data.meetingId)) && isOwner(request.resource.data.uploaderId);
+      allow read: if isMeetingMember(resource.data.meetingId) || isAdmin();
+      allow create: if isMeetingMember(request.resource.data.meetingId) && isOwner(request.resource.data.uploaderId);
       allow delete: if isOwner(resource.data.uploaderId) || isMeetingHost(resource.data.meetingId) || isAdmin();
     }
     match /recordings/{recordingId} {
@@ -52,10 +55,10 @@ service cloud.firestore {
     }
     match /activity_logs/{logId} {
       allow read: if isAdmin();
-      allow create: if isAuth();
+      allow create: if isAuth() && request.resource.data.userId == request.auth.uid;
     }
     match /typing/{meetingId}/users/{userId} {
-      allow read: if isMeetingParticipant(meetingId) || isMeetingHost(meetingId);
+      allow read: if isMeetingMember(meetingId);
       allow write: if isMeetingParticipant(meetingId) && isOwner(userId);
     }
   }
