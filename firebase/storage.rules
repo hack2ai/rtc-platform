@@ -2,19 +2,23 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     function isAuth() { return request.auth != null; }
+    function isMeetingMember(id) {
+      return isAuth() && (firestore.get(/databases/(default)/documents/meetings/$(id)).data.hostId == request.auth.uid || request.auth.uid in firestore.get(/databases/(default)/documents/meetings/$(id)).data.participants);
+    }
     match /users/{userId}/avatar/{file} {
       allow read: if true;
       allow write: if isAuth() && request.auth.uid == userId && request.resource.size < 5 * 1024 * 1024;
     }
     match /meetings/{meetingId}/files/{file} {
-      allow read: if isAuth();
-      allow write: if isAuth() && request.resource.size < 50 * 1024 * 1024;
+      allow read: if isMeetingMember(meetingId);
+      allow write: if isMeetingMember(meetingId) && request.resource.size < 50 * 1024 * 1024;
+      allow delete: if isMeetingMember(meetingId);
     }
     match /meetings/{meetingId}/recordings/{file} {
-      allow read, write: if isAuth();
+      allow read, write, delete: if isMeetingMember(meetingId);
     }
     match /meetings/{meetingId}/whiteboard/{file} {
-      allow read, write: if isAuth();
+      allow read, write, delete: if isMeetingMember(meetingId);
     }
   }
 }
