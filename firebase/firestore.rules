@@ -9,7 +9,7 @@ service cloud.firestore {
     function isMeetingParticipant(id) { return isAuth() && meetingExists(id) && request.auth.uid in get(/databases/$(database)/documents/meetings/$(id)).data.participants; }
 
     match /users/{userId} {
-      allow read: if isAuth();
+      allow read: if isOwner(userId) || isAdmin();
       allow create: if isOwner(userId);
       allow update, delete: if isOwner(userId) || isAdmin();
     }
@@ -23,22 +23,22 @@ service cloud.firestore {
         allow delete: if isMeetingHost(meetingId) || isOwner(userId) || isAdmin();
       }
       match /signaling/{signalId} {
-        allow read, create: if isMeetingParticipant(meetingId);
+        allow read, create: if isMeetingParticipant(meetingId) || isMeetingHost(meetingId);
         allow delete: if isMeetingHost(meetingId) || isAdmin();
       }
       match /whiteboard/{actionId} {
-        allow read, create: if isMeetingParticipant(meetingId);
+        allow read, create: if isMeetingParticipant(meetingId) || isMeetingHost(meetingId);
         allow delete: if isMeetingHost(meetingId) || isAdmin();
       }
     }
     match /messages/{messageId} {
       allow read: if isMeetingParticipant(resource.data.meetingId) || isMeetingHost(resource.data.meetingId) || isAdmin();
-      allow create: if isMeetingParticipant(request.resource.data.meetingId) && isOwner(request.resource.data.senderId);
+      allow create: if (isMeetingParticipant(request.resource.data.meetingId) || isMeetingHost(request.resource.data.meetingId)) && isOwner(request.resource.data.senderId);
       allow update, delete: if isOwner(resource.data.senderId) || isAdmin();
     }
     match /files/{fileId} {
       allow read: if isMeetingParticipant(resource.data.meetingId) || isMeetingHost(resource.data.meetingId) || isAdmin();
-      allow create: if isMeetingParticipant(request.resource.data.meetingId) && isOwner(request.resource.data.uploaderId);
+      allow create: if (isMeetingParticipant(request.resource.data.meetingId) || isMeetingHost(request.resource.data.meetingId)) && isOwner(request.resource.data.uploaderId);
       allow delete: if isOwner(resource.data.uploaderId) || isMeetingHost(resource.data.meetingId) || isAdmin();
     }
     match /recordings/{recordingId} {
