@@ -29,14 +29,18 @@ service firebase.storage {
     }
 
     match /meetings/{meetingId}/recordings/{file} {
-      allow read, write, delete: if isMeetingHost(meetingId)
+      allow read: if isMeetingHost(meetingId);
+      allow write: if isMeetingHost(meetingId)
         && request.resource.size < 1024 * 1024 * 1024
-        && (request.resource.contentType == null || request.resource.contentType.matches('video/.*'));
+        && request.resource.contentType != null
+        && request.resource.contentType.matches('video/.*');
+      allow delete: if isMeetingHost(meetingId);
     }
 
     match /meetings/{meetingId}/whiteboard/{file} {
-      allow read, write, delete: if isMeetingMember(meetingId)
-        && request.resource.size < 10 * 1024 * 1024;
+      allow read: if isMeetingMember(meetingId);
+      allow write: if isMeetingMember(meetingId) && request.resource.size < 10 * 1024 * 1024;
+      allow delete: if isMeetingMember(meetingId);
     }
   }
 }
