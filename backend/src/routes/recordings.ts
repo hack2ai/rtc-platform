@@ -1,0 +1,11 @@
+import { Router } from 'express';
+import { authenticate, requireHost } from '../middleware/auth';
+import { startRecording, stopRecording, finalizeRecording, getRecordings, deleteRecording } from '../controllers/recordingController';
+const r = Router();
+r.use(authenticate);
+r.post('/meetings/:meetingId/recordings/start', requireHost, startRecording);
+r.post('/recordings/:recordingId/stop', stopRecording);
+r.put('/recordings/:recordingId/finalize', finalizeRecording);
+r.get('/recordings', getRecordings);
+r.delete('/recordings/:recordingId', deleteRecording);
+export default r;
