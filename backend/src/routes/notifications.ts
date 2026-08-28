@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import { authenticate } from '../middleware/auth';
+import { getNotifications, markRead, markAllRead, deleteNotification } from '../controllers/notificationController';
+const r = Router();
+r.use(authenticate);
+r.get('/', getNotifications);
+r.put('/read-all', markAllRead);
+r.put('/:notificationId/read', markRead);
+r.delete('/:notificationId', deleteNotification);
+export default r;
