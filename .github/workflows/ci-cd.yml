@@ -6,22 +6,39 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-backend:
+    name: Backend • install, build & test
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: backend/package.json
-      - run: npm install
-      - run: npm run build
-      - run: npm test
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
         env:
           NODE_ENV: test
           FIREBASE_PROJECT_ID: test
@@ -31,19 +48,27 @@ jobs:
           JWT_SECRET: test-secret
 
   test-frontend:
+    name: Frontend • install & production build
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: frontend/package.json
-      - run: npm install
-      - run: npm run build
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Production build
+        run: npm run build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8080/api
           NEXT_PUBLIC_FIREBASE_API_KEY: test
@@ -54,31 +79,53 @@ jobs:
           NEXT_PUBLIC_FIREBASE_APP_ID: test
 
   deploy-backend:
+    name: Deploy backend • Render
     needs: test-backend
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      secrets.RENDER_BACKEND_SERVICE_ID != '' &&
+      secrets.RENDER_API_KEY != ''
     steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to Render
+      - name: Trigger Render deployment
+        env:
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_BACKEND_SERVICE_ID }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
-          curl -X POST \
-            "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
-            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{"clearCache":"do_not_clear"}'
+          curl --fail --silent --show-error \
+            --request POST \
+            "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys" \
+            --header "Authorization: Bearer ${RENDER_API_KEY}" \
+            --header "Content-Type: application/json" \
+            --data '{"clearCache":"do_not_clear"}'
 
   deploy-frontend:
+    name: Deploy frontend • Vercel
     needs: test-frontend
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      secrets.VERCEL_TOKEN != '' &&
+      secrets.VERCEL_ORG_ID != '' &&
+      secrets.VERCEL_PROJECT_ID != ''
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-      - run: npm install -g vercel
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel
+
       - name: Deploy to Vercel
         working-directory: ./frontend
-        run: vercel --prod --token=${{ secrets.VERCEL_TOKEN }}
         env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel --prod --token="$VERCEL_TOKEN"
