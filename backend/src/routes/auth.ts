@@ -1,0 +1,13 @@
+import { Router } from 'express';
+import { authenticate } from '../middleware/auth';
+import { authLimiter } from '../middleware/rateLimiter';
+import { sanitizeInput, validate, validateUpdateProfile } from '../middleware/validation';
+import { register, getProfile, updateProfile, updateSettings, logout, deleteAccount } from '../controllers/authController';
+const r = Router();
+r.post('/register', authLimiter, authenticate, sanitizeInput, register);
+r.get('/profile', authenticate, getProfile);
+r.put('/profile', authenticate, sanitizeInput, validateUpdateProfile, validate, updateProfile);
+r.put('/settings', authenticate, sanitizeInput, updateSettings);
+r.post('/logout', authenticate, logout);
+r.delete('/account', authenticate, deleteAccount);
+export default r;
