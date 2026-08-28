@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+dist/
+.next/
+out/
+build/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Runtime
+.DS_Store
+*.pem
+.vercel
+.turbo
+
+# Testing
+coverage/
+
+# Firebase
+.firebase/
+firebase-debug.log
