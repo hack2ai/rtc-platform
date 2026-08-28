@@ -1,48 +1,14 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import { FieldValue } from 'firebase-admin/firestore';
 import { authenticate } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { AuthenticatedRequest } from '../types';
 import { db } from '../config/firebase';
 import { sendError, sendPaginated, sendSuccess } from '../utils/response';
-
-const r = Router(); r.use(authenticate);
-const hostMeeting = async (meetingId:string, uid:string) => { const s=await db.collection('meetings').doc(meetingId).get(); return s.exists && s.data()!.hostId===uid ? s : null; };
-
-const start = asyncHandler(async (req:AuthenticatedRequest,res) => {
-  const uid=req.user!.uid, meeting=await hostMeeting(req.params.meetingId,uid);
-  if(!meeting) return sendError(res,'Meeting not found or host access required',403);
-  const m=meeting.data()!; if(!m.recordingEnabled && req.body?.force !== true) return sendError(res,'Recording is disabled for this meeting',403);
-  const active=await db.collection('recordings').where('meetingId','==',req.params.meetingId).where('status','==','recording').limit(1).get();
-  if(!active.empty) return sendError(res,'A recording is already in progress',409);
-  const ref=db.collection('recordings').doc(); await ref.set({id:ref.id,meetingId:req.params.meetingId,meetingTitle:m.title,hostId:uid,status:'recording',startedAt:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});
-  await meeting.ref.update({recordingId:ref.id,updatedAt:FieldValue.serverTimestamp()}); sendSuccess(res,{id:ref.id,status:'recording'},'Recording started',201);
-});
-
-const stop = asyncHandler(async (req:AuthenticatedRequest,res) => {
-  const ref=db.collection('recordings').doc(req.params.recordingId), snap=await ref.get(); if(!snap.exists) return sendError(res,'Recording not found',404);
-  const d=snap.data()!; if(d.hostId!==req.user!.uid) return sendError(res,'Host access required',403); if(d.status!=='recording') return sendError(res,'Recording is not active',409);
-  await ref.update({status:'processing',endedAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()}); sendSuccess(res,{id:ref.id,status:'processing'},'Recording stopped');
-});
-
-const finalize = asyncHandler(async (req:AuthenticatedRequest,res) => {
-  const ref=db.collection('recordings').doc(req.params.recordingId), snap=await ref.get(); if(!snap.exists) return sendError(res,'Recording not found',404);
-  const d=snap.data()!; if(d.hostId!==req.user!.uid) return sendError(res,'Host access required',403); if(!['processing','recording'].includes(d.status)) return sendError(res,'Recording cannot be finalized',409);
-  const updates:any={status:'available',updatedAt:FieldValue.serverTimestamp()}; if(typeof req.body?.fileURL==='string') updates.fileURL=req.body.fileURL; if(Number.isFinite(Number(req.body?.fileSize))) updates.fileSize=Number(req.body.fileSize);
-  await ref.update(updates); sendSuccess(res,{id:ref.id,status:'available',fileURL:updates.fileURL || d.fileURL || null},'Recording finalized');
-});
-
-const list = asyncHandler(async (req:AuthenticatedRequest,res) => {
-  const page=Math.max(1,Number(req.query.page||1)),limit=Math.min(50,Math.max(1,Number(req.query.limit||20)));
-  const snap=await db.collection('recordings').where('hostId','==',req.user!.uid).limit(200).get(); const items=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a:any,b:any)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0)); const start=(page-1)*limit; sendPaginated(res,items.slice(start,start+limit),page,limit,items.length);
-});
-
-const remove = asyncHandler(async (req:AuthenticatedRequest,res) => { const ref=db.collection('recordings').doc(req.params.recordingId),snap=await ref.get(); if(!snap.exists)return sendError(res,'Recording not found',404); if(snap.data()!.hostId!==req.user!.uid)return sendError(res,'Host access required',403); await ref.delete(); sendSuccess(res,null,'Recording deleted'); });
-
-r.post('/meetings/:meetingId/start', start);
-r.post('/meetings/:meetingId/recordings/start', start);
-r.post('/:recordingId/stop', stop);
-r.put('/:recordingId/finalize', finalize);
-r.get('/', list);
-r.delete('/:recordingId', remove);
-export default r;
+const r=Router();r.use(authenticate);const hostMeeting=async(id:string,uid:string)=>{const s=await db.collection('meetings').doc(id).get();return s.exists&&s.data()!.hostId===uid?s:null;};
+const start=asyncHandler(async(req:AuthenticatedRequest,res:Response)=>{const meeting=await hostMeeting(req.params.meetingId,req.user!.uid);if(!meeting)return sendError(res,'Meeting not found or host access required',403);const m=meeting.data()!;if(!m.recordingEnabled&&req.body?.force!==true)return sendError(res,'Recording is disabled for this meeting',403);const active=await db.collection('recordings').where('meetingId','==',req.params.meetingId).where('status','==','recording').limit(1).get();if(!active.empty)return sendError(res,'A recording is already in progress',409);const ref=db.collection('recordings').doc();await ref.set({id:ref.id,meetingId:req.params.meetingId,meetingTitle:m.title,hostId:req.user!.uid,status:'recording',startedAt:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});await meeting.ref.update({recordingId:ref.id,updatedAt:FieldValue.serverTimestamp()});sendSuccess(res,{id:ref.id,status:'recording'},'Recording started',201);});
+const stop=asyncHandler(async(req:AuthenticatedRequest,res:Response)=>{const ref=db.collection('recordings').doc(req.params.recordingId),snap=await ref.get();if(!snap.exists)return sendError(res,'Recording not found',404);const d=snap.data()!;if(d.hostId!==req.user!.uid)return sendError(res,'Host access required',403);if(d.status!=='recording')return sendError(res,'Recording is not active',409);await ref.update({status:'processing',endedAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});sendSuccess(res,{id:ref.id,status:'processing'},'Recording stopped');});
+const finalize=asyncHandler(async(req:AuthenticatedRequest,res:Response)=>{const ref=db.collection('recordings').doc(req.params.recordingId),snap=await ref.get();if(!snap.exists)return sendError(res,'Recording not found',404);const d=snap.data()!;if(d.hostId!==req.user!.uid)return sendError(res,'Host access required',403);if(!['processing','recording'].includes(d.status))return sendError(res,'Recording cannot be finalized',409);const updates:any={status:'available',updatedAt:FieldValue.serverTimestamp()};if(typeof req.body?.fileURL==='string')updates.fileURL=req.body.fileURL;if(Number.isFinite(Number(req.body?.fileSize)))updates.fileSize=Number(req.body.fileSize);await ref.update(updates);sendSuccess(res,{id:ref.id,status:'available',fileURL:updates.fileURL||d.fileURL||null},'Recording finalized');});
+const list=asyncHandler(async(req:AuthenticatedRequest,res:Response)=>{const page=Math.max(1,Number(req.query.page||1)),limit=Math.min(50,Math.max(1,Number(req.query.limit||20))),snap=await db.collection('recordings').where('hostId','==',req.user!.uid).limit(200).get();const items=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a:any,b:any)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0));const start=(page-1)*limit;sendPaginated(res,items.slice(start,start+limit),page,limit,items.length);});
+const remove=asyncHandler(async(req:AuthenticatedRequest,res:Response)=>{const ref=db.collection('recordings').doc(req.params.recordingId),snap=await ref.get();if(!snap.exists)return sendError(res,'Recording not found',404);if(snap.data()!.hostId!==req.user!.uid)return sendError(res,'Host access required',403);await ref.delete();sendSuccess(res,null,'Recording deleted');});
+r.post('/meetings/:meetingId/start',start);r.post('/meetings/:meetingId/recordings/start',start);r.post('/:recordingId/stop',stop);r.put('/:recordingId/finalize',finalize);r.get('/',list);r.delete('/:recordingId',remove);export default r;
