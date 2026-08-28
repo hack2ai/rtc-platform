@@ -3,22 +3,40 @@ service firebase.storage {
   match /b/{bucket}/o {
     function isAuth() { return request.auth != null; }
     function isMeetingMember(id) {
-      return isAuth() && (firestore.get(/databases/(default)/documents/meetings/$(id)).data.hostId == request.auth.uid || request.auth.uid in firestore.get(/databases/(default)/documents/meetings/$(id)).data.participants);
+      return isAuth() && (
+        firestore.get(/databases/(default)/documents/meetings/$(id)).data.hostId == request.auth.uid ||
+        request.auth.uid in firestore.get(/databases/(default)/documents/meetings/$(id)).data.participants
+      );
     }
+    function isMeetingHost(id) {
+      return isAuth() && firestore.get(/databases/(default)/documents/meetings/$(id)).data.hostId == request.auth.uid;
+    }
+
     match /users/{userId}/avatar/{file} {
       allow read: if true;
-      allow write: if isAuth() && request.auth.uid == userId && request.resource.size < 5 * 1024 * 1024;
+      allow write: if isAuth() && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if isAuth() && request.auth.uid == userId;
     }
+
     match /meetings/{meetingId}/files/{file} {
       allow read: if isMeetingMember(meetingId);
-      allow write: if isMeetingMember(meetingId) && request.resource.size < 50 * 1024 * 1024;
+      allow write: if isMeetingMember(meetingId)
+        && request.resource.size < 50 * 1024 * 1024
+        && request.resource.contentType != null;
       allow delete: if isMeetingMember(meetingId);
     }
+
     match /meetings/{meetingId}/recordings/{file} {
-      allow read, write, delete: if isMeetingMember(meetingId);
+      allow read, write, delete: if isMeetingHost(meetingId)
+        && request.resource.size < 1024 * 1024 * 1024
+        && (request.resource.contentType == null || request.resource.contentType.matches('video/.*'));
     }
+
     match /meetings/{meetingId}/whiteboard/{file} {
-      allow read, write, delete: if isMeetingMember(meetingId);
+      allow read, write, delete: if isMeetingMember(meetingId)
+        && request.resource.size < 10 * 1024 * 1024;
     }
   }
 }
