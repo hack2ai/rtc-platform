@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuth() { return request.auth != null; }
+    function isOwner(uid) { return request.auth.uid == uid; }
+    function isAdmin() { return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'; }
+    function isMeetingHost(meetingId) { return isAuth() && get(/databases/$(database)/documents/meetings/$(meetingId)).data.hostId == request.auth.uid; }
+    function isMeetingParticipant(meetingId) { return isAuth() && request.auth.uid in get(/databases/$(database)/documents/meetings/$(meetingId)).data.participants; }
+
+    match /users/{userId} {
+      allow read: if isAuth();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+    match /meetings/{meetingId} {
+      allow read: if isAuth();
+      allow create: if isAuth() && request.resource.data.hostId == request.auth.uid;
+      allow update: if isMeetingHost(meetingId) || isAdmin();
+      allow delete: if isMeetingHost(meetingId) || isAdmin();
+      match /participants/{userId} {
+        allow read: if isAuth();
+        allow write: if isMeetingHost(meetingId) || isOwner(userId) || isAdmin();
+      }
+      match /signaling/{signalId} {
+        allow read, create: if isMeetingParticipant(meetingId);
+        allow delete: if isMeetingHost(meetingId);
+      }
+      match /whiteboard/{actionId} {
+        allow read, create: if isMeetingParticipant(meetingId);
+        allow delete: if isMeetingHost(meetingId);
+      }
+    }
+    match /messages/{messageId} {
+      allow read: if isAuth();
+      allow create: if isAuth() && request.auth.uid == request.resource.data.senderId;
+      allow update: if isOwner(resource.data.senderId) || isAdmin();
+      allow delete: if isOwner(resource.data.senderId) || isAdmin();
+    }
+    match /files/{fileId} {
+      allow read: if isAuth();
+      allow create: if isAuth() && isOwner(request.resource.data.uploaderId);
+      allow delete: if isOwner(resource.data.uploaderId) || isAdmin();
+    }
+    match /recordings/{recordingId} {
+      allow read, write: if isOwner(resource.data.hostId) || isAdmin();
+    }
+    match /notifications/{notificationId} {
+      allow read, update, delete: if isOwner(resource.data.userId);
+      allow create: if isAuth();
+    }
+    match /activity_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuth();
+    }
+    match /typing/{meetingId}/users/{userId} {
+      allow read: if isAuth();
+      allow write: if isOwner(userId);
+    }
+  }
+}
