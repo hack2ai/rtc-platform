@@ -1,0 +1,13 @@
+import { Router } from 'express';
+import { authenticate } from '../middleware/auth';
+import { sanitizeInput, validate, validateMessage } from '../middleware/validation';
+import { sendMessage, getMessages, reactToMessage, editMessage, deleteMessage, markMessagesRead } from '../controllers/chatController';
+const r = Router();
+r.use(authenticate);
+r.get('/meetings/:meetingId/messages', getMessages);
+r.post('/meetings/:meetingId/messages', sanitizeInput, validateMessage, validate, sendMessage);
+r.put('/meetings/:meetingId/messages/read', markMessagesRead);
+r.post('/messages/:messageId/react', sanitizeInput, reactToMessage);
+r.put('/messages/:messageId', sanitizeInput, editMessage);
+r.delete('/messages/:messageId', deleteMessage);
+export default r;
