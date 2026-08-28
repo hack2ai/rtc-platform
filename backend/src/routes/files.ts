@@ -1,0 +1,62 @@
+import { Router } from 'express';
+import multer from 'multer';
+import { FieldValue } from 'firebase-admin/firestore';
+import { authenticate } from '../middleware/auth';
+import { asyncHandler } from '../middleware/errorHandler';
+import { AuthenticatedRequest } from '../types';
+import { db, storage } from '../config/firebase';
+import { sendError, sendPaginated, sendSuccess } from '../utils/response';
+
+const r = Router();
+r.use(authenticate);
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 1 } });
+const allowed = new Set(['image/jpeg','image/png','image/gif','image/webp','application/pdf','text/plain','text/csv','application/zip','application/json','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.presentationml.presentation']);
+
+async function member(meetingId: string, uid: string) {
+  const snap = await db.collection('meetings').doc(meetingId).get();
+  if (!snap.exists) return { snap, ok: false };
+  const d = snap.data()!; return { snap, ok: d.hostId === uid || d.participants?.includes(uid) };
+}
+
+r.post('/meetings/:meetingId', upload.single('file'), asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const uid = req.user!.uid; const file = req.file; const meetingId = req.params.meetingId;
+  if (!file) return sendError(res, 'A file is required', 400);
+  const access = await member(meetingId, uid);
+  if (!access.snap.exists) return sendError(res, 'Meeting not found', 404);
+  if (!access.ok) return sendError(res, 'You are not a participant in this meeting', 403);
+  if (!allowed.has(file.mimetype)) return sendError(res, 'File type is not allowed', 415);
+  if (!access.snap.data()!.settings?.fileShareEnabled) return sendError(res, 'File sharing is disabled', 403);
+
+  const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 180);
+  const path = `meetings/${meetingId}/files/${Date.now()}-${uid}-${safeName}`;
+  const bucket = storage.bucket(); const object = bucket.file(path);
+  await object.save(file.buffer, { metadata: { contentType: file.mimetype, metadata: { uploadedBy: uid, meetingId } }, resumable: false });
+  const [url] = await object.getSignedUrl({ action: 'read', expires: Date.now() + 60 * 60 * 1000 });
+  const ref = db.collection('files').doc();
+  const data = { id: ref.id, meetingId, uploaderId: uid, uploaderName: req.user!.displayName || req.user!.email || 'User', name: safeName, type: file.mimetype, size: file.size, url, storagePath: path, createdAt: FieldValue.serverTimestamp() };
+  await ref.set(data);
+  sendSuccess(res, { ...data, createdAt: new Date().toISOString() }, 'File uploaded', 201);
+}));
+
+r.get('/meetings/:meetingId', asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const access = await member(req.params.meetingId, req.user!.uid);
+  if (!access.snap.exists) return sendError(res, 'Meeting not found', 404);
+  if (!access.ok) return sendError(res, 'Access denied', 403);
+  const page = Math.max(1, Number(req.query.page || 1)); const limit = Math.min(50, Math.max(1, Number(req.query.limit || 20)));
+  const snap = await db.collection('files').where('meetingId','==',req.params.meetingId).limit(200).get();
+  const items = snap.docs.map(d => ({ id:d.id, ...d.data() })).sort((a:any,b:any)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0));
+  const start=(page-1)*limit; sendPaginated(res, items.slice(start,start+limit),page,limit,items.length);
+}));
+
+r.delete('/:fileId', asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const ref = db.collection('files').doc(req.params.fileId); const snap = await ref.get();
+  if (!snap.exists) return sendError(res, 'File not found', 404); const d=snap.data()!;
+  if (d.uploaderId !== req.user!.uid) {
+    const meeting = await db.collection('meetings').doc(d.meetingId).get();
+    if (!meeting.exists || meeting.data()!.hostId !== req.user!.uid) return sendError(res, 'Access denied', 403);
+  }
+  if (d.storagePath) { try { await storage.bucket().file(d.storagePath).delete(); } catch (_) {} }
+  await ref.delete(); sendSuccess(res, null, 'File deleted');
+}));
+
+export default r;
