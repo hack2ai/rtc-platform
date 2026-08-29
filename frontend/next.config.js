@@ -16,6 +16,14 @@ const nextConfig = {
       { protocol:'https', hostname:'storage.googleapis.com' },
     ],
   },
+  async rewrites() {
+    return [
+      {
+        source: '/api-proxy/:path*',
+        destination: `${process.env.API_PROXY_TARGET || 'http://127.0.0.1:8080'}/api/:path*`,
+      },
+    ];
+  },
   async headers() {
     return [{ source:'/(.*)', headers:[
       { key:'X-Frame-Options', value:'DENY' },
