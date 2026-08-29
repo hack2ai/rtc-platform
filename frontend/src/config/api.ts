@@ -1,7 +1,10 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import { firebaseAuth } from './firebase';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api';
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api';
+const API_URL = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  ? '/api-proxy'
+  : configuredApiUrl;
 
 class ApiClient {
   private instance: AxiosInstance;
