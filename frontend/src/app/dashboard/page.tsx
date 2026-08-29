@@ -10,7 +10,29 @@ import toast from 'react-hot-toast';
 
 type Meeting = { id: string; code: string; title?: string; status?: string; createdAt?: any };
 
-const shareBase = () => (process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
+const shareBase = () => (typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || '')).replace(/\/$/, '');
+
+const normalizeMeetingCode = (input: string) => {
+  const value = input.trim();
+  if (!value) return '';
+
+  try {
+    const url = new URL(value);
+    const marker = '/meeting/';
+    const index = url.pathname.indexOf(marker);
+    if (index >= 0) {
+      return decodeURIComponent(url.pathname.slice(index + marker.length)).replace(/^\/|\/$/g, '');
+    }
+    return decodeURIComponent(url.pathname.replace(/^\/+|\/+$/g, ''));
+  } catch {
+    const marker = '/meeting/';
+    const index = value.indexOf(marker);
+    if (index >= 0) {
+      return decodeURIComponent(value.slice(index + marker.length).split(/[?#]/)[0]).replace(/^\/|\/$/g, '');
+    }
+    return value.replace(/^\/+|\/+$/g, '');
+  }
+};
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -45,7 +67,11 @@ export default function DashboardPage() {
     return () => { active = false; };
   }, [user]);
 
-  const join=()=>{const value=code.trim();if(value)router.push(`/meeting/${encodeURIComponent(value)}`)};
+  const join=()=>{
+    const value=normalizeMeetingCode(code);
+    if(value) router.push(`/meeting/${encodeURIComponent(value)}`);
+    else toast.error('Enter a meeting code or invite link');
+  };
 
   const create=async()=>{
     setBusy(true);
@@ -77,7 +103,7 @@ export default function DashboardPage() {
       <div className="mb-10 max-w-3xl"><p className="mb-3 text-sm font-medium text-indigo-400">REAL-TIME WORKSPACE</p><h1 className="text-4xl font-bold tracking-tight md:text-5xl">Meet, collaborate, and get work done.</h1><p className="mt-4 text-lg text-slate-400">Host secure video meetings with chat, screen sharing, files, and collaborative tools in one workspace.</p></div>
       <div className="grid gap-5 md:grid-cols-2">
         <button onClick={()=>setShowCreate(true)} className="group rounded-2xl border border-indigo-400/30 bg-indigo-500/10 p-7 text-left transition hover:-translate-y-0.5 hover:bg-indigo-500/15"><div className="mb-8 grid h-12 w-12 place-items-center rounded-xl bg-indigo-500"><Plus/></div><h2 className="text-xl font-semibold">Start a new meeting</h2><p className="mt-2 text-sm text-slate-400">Create a private meeting room and invite participants.</p><span className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-indigo-300">Create meeting <ArrowRight size={16}/></span></button>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-7"><div className="mb-5 flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-xl bg-slate-800"><ArrowRight/></div><div><h2 className="text-xl font-semibold">Join a meeting</h2><p className="text-sm text-slate-400">Enter a meeting code to continue.</p></div></div><div className="flex gap-2"><input value={code} onChange={e=>setCode(e.target.value)} onKeyDown={e=>e.key==='Enter'&&join()} placeholder="abc-1234-def" className="min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-900 px-4 py-3 outline-none focus:border-indigo-400"/><button onClick={join} disabled={!code.trim()} className="rounded-xl bg-white px-5 font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">Join</button></div></div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-7"><div className="mb-5 flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-xl bg-slate-800"><ArrowRight/></div><div><h2 className="text-xl font-semibold">Join a meeting</h2><p className="text-sm text-slate-400">Enter a meeting code or paste an invite link.</p></div></div><div className="flex gap-2"><input value={code} onChange={e=>setCode(e.target.value)} onKeyDown={e=>e.key==='Enter'&&join()} placeholder="abc-1234-def or invite URL" className="min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-900 px-4 py-3 outline-none focus:border-indigo-400"/><button onClick={join} disabled={!code.trim()} className="rounded-xl bg-white px-5 font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">Join</button></div></div>
       </div>
       <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <button onClick={()=>document.getElementById('recent-meetings')?.scrollIntoView({behavior:'smooth'})} className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-left hover:bg-white/[0.06]"><Video size={20} className="text-indigo-400"/><p className="mt-4 font-medium">Meetings</p><p className="mt-1 text-xs text-slate-500">View your recent meeting rooms</p></button>
