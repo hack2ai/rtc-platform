@@ -1,4 +1,5 @@
 import * as admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -11,7 +12,10 @@ if (!admin.apps.length) {
   });
 }
 
-export const db = admin.firestore();
+const firestoreDatabaseId = process.env.FIRESTORE_DATABASE_ID?.trim();
+export const db = firestoreDatabaseId
+  ? getFirestore(admin.app(), firestoreDatabaseId)
+  : getFirestore(admin.app());
 export const storage = admin.storage();
 export const auth = admin.auth();
 export default admin;
