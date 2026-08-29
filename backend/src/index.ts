@@ -15,7 +15,43 @@ let apiReady = false;
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, referrerPolicy: { policy: 'strict-origin-when-cross-origin' } }));
-app.use(cors({ origin: ENV.FRONTEND_URL, credentials: true, methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
+
+const explicitOrigins = new Set([
+  ENV.FRONTEND_URL,
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  ...ENV.CORS_ORIGINS,
+]);
+
+const isDevLanOrigin = (origin: string): boolean => {
+  if (ENV.NODE_ENV !== 'development') return false;
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'http:' || !/^[0-9]+$/.test(url.port || '3000') || Number(url.port || 3000) !== 3000) return false;
+    const host = url.hostname;
+    const ipv4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (!ipv4) return false;
+    const octets = ipv4.slice(1).map(Number);
+    return (octets[0] === 10)
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168);
+  } catch {
+    return false;
+  }
+};
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || explicitOrigins.has(origin) || isDevLanOrigin(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error(`CORS origin not allowed: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(compression());
 app.use(cookieParser());
 app.use(express.json({ limit: ENV.BODY_LIMIT }));
@@ -26,7 +62,7 @@ app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', service: 
 app.get('/ready', (_req, res) => apiReady ? res.status(200).json({ status: 'ready' }) : res.status(503).json({ status: 'degraded', reason: 'Application services are still initializing' }));
 app.use('/api', apiLimiter);
 
-const server = app.listen(ENV.PORT, () => {
+const server = app.listen(ENV.PORT, '0.0.0.0', () => {
   logger.info(`🚀 Server on port ${ENV.PORT} [${ENV.NODE_ENV}]`);
   void loadApiRoutes();
 });
