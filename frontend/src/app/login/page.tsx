@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword } from 'firebase/auth';
 import { firebaseAuth, googleProvider } from '../../config/firebase';
 import { api } from '../../config/api';
@@ -10,18 +10,35 @@ import toast from 'react-hot-toast';
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = useMemo(() => {
+    const requested = searchParams.get('next');
+    return requested && requested.startsWith('/') && !requested.startsWith('//') ? requested : '/dashboard';
+  }, [searchParams]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(firebaseAuth, user => { if (user) router.replace('/dashboard'); });
+    const unsubscribe = onAuthStateChanged(firebaseAuth, user => {
+      if (user) router.replace(next);
+    });
     return unsubscribe;
-  }, [router]);
+  }, [next, router]);
 
   const syncProfile = async () => {
     await api.post('/auth/register', {});
-    router.replace('/dashboard');
+    router.replace(next);
+  };
+
+  const formatAuthError = (error: any) => {
+    if (error?.code === 'auth/unauthorized-domain') {
+      return 'This sign-in host is not authorized in Firebase Authentication. Add the current host to Authentication > Settings > Authorized domains.';
+    }
+    return error?.response?.data?.error
+      || error?.response?.data?.message
+      || error?.message?.replace('Firebase: ', '')
+      || 'Unable to sign in';
   };
 
   const login = async () => {
@@ -32,7 +49,7 @@ export default function LoginPage() {
       await syncProfile();
     } catch (error: any) {
       await firebaseAuth.signOut().catch(() => undefined);
-      toast.error(error?.response?.data?.error || error?.response?.data?.message || error?.message?.replace('Firebase: ', '') || 'Unable to sign in');
+      toast.error(formatAuthError(error));
     } finally { setBusy(false); }
   };
 
@@ -43,7 +60,7 @@ export default function LoginPage() {
       await syncProfile();
     } catch (error: any) {
       await firebaseAuth.signOut().catch(() => undefined);
-      toast.error(error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Google sign-in failed');
+      toast.error(formatAuthError(error));
     } finally { setBusy(false); }
   };
 
