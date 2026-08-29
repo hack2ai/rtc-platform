@@ -3,16 +3,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { addDoc, collection, onSnapshot, query, where, serverTimestamp } from 'firebase/firestore';
 import { useParams, useRouter } from 'next/navigation';
-import { Mic, MicOff, Video, VideoOff, MonitorUp, MessageSquare, PhoneOff, Users, Shield, Copy, Send, X } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, MonitorUp, MessageSquare, PhoneOff, Users, Shield, Copy, Send, X, Share2 } from 'lucide-react';
 import { api } from '../../../config/api';
 import { firebaseAuth, firestore } from '../../../config/firebase';
 import toast from 'react-hot-toast';
 
 type Message = { id: string; senderId: string; senderName?: string; content: string; deletedAt?: any };
 type Participant = { uid: string; displayName?: string; role?: string; status?: string };
-
 type Peer = { pc: RTCPeerConnection };
 const fallbackIce: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+const getShareBase = () =>
+  (process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
 
 export default function MeetingRoom() {
   const { code } = useParams<{ code: string }>();
@@ -61,12 +63,23 @@ export default function MeetingRoom() {
     return pc;
   };
 
+  const requestMedia = async (wantVideo: boolean, wantAudio: boolean) => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new DOMException('Camera and microphone are not available in this browser/context.', 'NotSupportedError');
+    }
+    return navigator.mediaDevices.getUserMedia({ video: wantVideo, audio: wantAudio });
+  };
+
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!firebaseAuth.currentUser) { router.replace('/login'); return; }
+      if (!firebaseAuth.currentUser) {
+        router.replace('/login?next=' + encodeURIComponent(window.location.pathname));
+        return;
+      }
       try {
         const meta = (await api.get<any>(`/meetings/code/${encodeURIComponent(String(code))}`)).data?.data;
+        if (!meta?.id) throw new Error('Meeting not found');
         const joined = (await api.post<any>(`/meetings/${meta.id}/join`, {})).data?.data;
         if (!mounted) return;
         setMeeting({ ...meta, ...joined?.meeting });
@@ -75,10 +88,29 @@ export default function MeetingRoom() {
           const ice = (await api.get<any>('/meetings/ice-servers')).data?.data?.iceServers;
           if (Array.isArray(ice) && ice.length) setIceServers(ice);
         } catch { /* use STUN fallback */ }
-        const media = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        if (mounted) { streamRef.current = media; setStream(media); setStatus('Connected'); }
+
+        let media: MediaStream | null = null;
+        try {
+          media = await requestMedia(true, true);
+        } catch {
+          try { media = await requestMedia(true, false); } catch {
+            try { media = await requestMedia(false, true); } catch { media = null; }
+          }
+        }
+        if (mounted) {
+          if (media) {
+            streamRef.current = media;
+            setStream(media);
+            setAudio(media.getAudioTracks().length > 0 ? media.getAudioTracks()[0].enabled : false);
+            setVideo(media.getVideoTracks().length > 0 ? media.getVideoTracks()[0].enabled : false);
+            setStatus('Connected');
+          } else {
+            setStatus('Connected');
+            toast.error('Camera/microphone access is unavailable. You can still join and use chat/screen sharing.');
+          }
+        }
       } catch (e: any) {
-        if (mounted) { setStatus('Unable to join'); toast.error(e?.response?.data?.error || 'Unable to join meeting'); }
+        if (mounted) { setStatus('Unable to join'); toast.error(e?.response?.data?.error || e?.message || 'Unable to join meeting'); }
       }
     })();
     return () => { mounted = false; };
@@ -145,17 +177,65 @@ export default function MeetingRoom() {
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
   }, []);
 
-  const toggle = (kind: 'audio' | 'video') => {
-    if (!streamRef.current) return;
-    streamRef.current.getTracks().filter((t) => t.kind === kind).forEach((t) => { t.enabled = !t.enabled; });
-    kind === 'audio' ? setAudio((v) => !v) : setVideo((v) => !v);
+  const ensureTrack = async (kind: 'audio' | 'video') => {
+    const current = streamRef.current;
+    const existing = current?.getTracks().find((track) => track.kind === kind);
+    if (existing) { existing.enabled = true; return existing; }
+    const requested = await requestMedia(kind === 'video', kind === 'audio');
+    const track = requested.getTracks().find((item) => item.kind === kind);
+    if (!track) { requested.getTracks().forEach((item) => item.stop()); throw new Error(`No ${kind} track available`); }
+    if (!streamRef.current) {
+      streamRef.current = requested;
+      setStream(requested);
+    } else {
+      streamRef.current.addTrack(track);
+      requested.getTracks().filter((item) => item !== track).forEach((item) => item.stop());
+    }
+    Object.values(peers.current).forEach(({ pc }) => {
+      if (!pc.getSenders().some((sender) => sender.track?.kind === kind)) void pc.addTrack(track, streamRef.current!);
+      else {
+        const sender = pc.getSenders().find((item) => item.track?.kind === kind);
+        if (sender) void sender.replaceTrack(track);
+      }
+    });
+    return track;
   };
 
-  const copy = async () => { try { await navigator.clipboard.writeText(String(code)); setCopied(true); window.setTimeout(() => setCopied(false), 1500); } catch { toast.error('Could not copy meeting code'); } };
+  const toggle = async (kind: 'audio' | 'video') => {
+    try {
+      if (!streamRef.current?.getTracks().some((t) => t.kind === kind)) {
+        await ensureTrack(kind);
+        kind === 'audio' ? setAudio(true) : setVideo(true);
+        return;
+      }
+      streamRef.current.getTracks().filter((t) => t.kind === kind).forEach((t) => { t.enabled = !t.enabled; });
+      kind === 'audio' ? setAudio((v) => !v) : setVideo((v) => !v);
+    } catch (error: any) {
+      console.error('Media toggle error:', error);
+      toast.error(`${kind === 'audio' ? 'Microphone' : 'Camera'} permission or device is unavailable.`);
+    }
+  };
+
+  const copy = async () => {
+    try {
+      const invite = `${getShareBase()}/meeting/${encodeURIComponent(String(code))}`;
+      if (navigator.share && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+        await navigator.share({ title: meeting?.title || 'RTC Meeting', text: 'Join my RTC meeting', url: invite });
+      } else {
+        await navigator.clipboard.writeText(invite);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+        toast.success('Invite link copied');
+      }
+    } catch (error: any) {
+      if (error?.name !== 'AbortError') toast.error('Could not share meeting link');
+    }
+  };
 
   const share = async () => {
     if (sharing) { screenStreamRef.current?.getTracks().forEach((t) => t.stop()); screenStreamRef.current = null; setSharing(false); return; }
     try {
+      if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Screen sharing is not supported in this browser.');
       const screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
       screenStreamRef.current = screen;
       const track = screen.getVideoTracks()[0];
@@ -169,7 +249,7 @@ export default function MeetingRoom() {
         if (videoRef.current && streamRef.current) videoRef.current.srcObject = streamRef.current;
         setSharing(false);
       };
-    } catch { setSharing(false); }
+    } catch (error: any) { setSharing(false); toast.error(error?.message || 'Unable to share screen'); }
   };
 
   const sendMessage = async () => {
@@ -184,11 +264,11 @@ export default function MeetingRoom() {
 
   if (status === 'Connecting…') return <main className="grid h-screen place-items-center bg-slate-950 text-white"><div className="text-center"><div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-indigo-400"/><p>{status}</p></div></main>;
   if (status === 'Waiting for host approval') return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-white/[0.04] p-8 text-center"><Shield className="mx-auto text-indigo-400" size={32}/><h1 className="mt-4 text-2xl font-semibold">Waiting for approval</h1><p className="mt-2 text-sm text-slate-400">The host has been notified. Keep this tab open while you wait.</p><button onClick={leave} className="mt-6 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-slate-950">Leave waiting room</button></div></main>;
-  if (status !== 'Connected') return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white"><div className="text-center"><h1 className="text-xl font-semibold">Unable to join meeting</h1><button onClick={() => router.replace('/dashboard')} className="mt-4 rounded-xl bg-indigo-500 px-5 py-2 text-sm font-semibold">Back to dashboard</button></div></main>;
+  if (status !== 'Connected') return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white"><div className="text-center"><h1 className="text-xl font-semibold">Unable to join meeting</h1><p className="mt-2 text-sm text-slate-400">Check the meeting code, your network connection, and authentication.</p><button onClick={() => router.replace('/dashboard')} className="mt-4 rounded-xl bg-indigo-500 px-5 py-2 text-sm font-semibold">Back to dashboard</button></div></main>;
 
   return <main className="flex h-screen flex-col bg-slate-950 text-white">
-    <header className="flex h-16 items-center justify-between border-b border-white/10 px-5"><div><p className="font-semibold">{meeting?.title || 'RTC Meeting'}</p><button onClick={copy} className="mt-0.5 flex items-center gap-1 text-xs text-slate-400 hover:text-white" aria-label="Copy meeting code">{code}<Copy size={12}/>{copied && ' Copied'}</button></div><div className="flex items-center gap-3 text-slate-400"><Shield size={16}/><span className="hidden text-xs sm:inline">{participants.length} participant{participants.length === 1 ? '' : 's'}</span></div></header>
+    <header className="flex h-16 items-center justify-between border-b border-white/10 px-5"><div><p className="font-semibold">{meeting?.title || 'RTC Meeting'}</p><button onClick={copy} className="mt-0.5 flex items-center gap-1 text-xs text-slate-400 hover:text-white" aria-label="Copy invite link">{code}<Copy size={12}/>{copied && ' Copied'}</button></div><div className="flex items-center gap-3 text-slate-400"><Shield size={16}/><span className="hidden text-xs sm:inline">{participants.length} participant{participants.length === 1 ? '' : 's'}</span></div></header>
     <section className="flex min-h-0 flex-1"><div className="relative flex-1 overflow-auto p-4"><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={videoRef} autoPlay muted playsInline className={`h-full w-full object-cover ${video || sharing ? '' : 'hidden'}`}/>{!video && !sharing && <div className="absolute inset-0 grid place-items-center"><div className="grid h-20 w-20 place-items-center rounded-full bg-slate-800 text-2xl font-semibold">U</div></div>}<span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">You</span>{sharing && <span className="absolute right-3 top-3 rounded-lg bg-emerald-500/90 px-2.5 py-1 text-xs font-medium">Screen sharing</span>}</div>{participants.map((p) => { const id = p.uid; if (!id || id === firebaseAuth.currentUser?.uid) return null; return <div key={id} className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={(el) => { remoteRefs.current[id] = el; }} autoPlay playsInline className="h-full w-full object-cover"/><span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">{p.displayName || 'Participant'}</span></div>; })}</div></div>{(chat || people) && <aside className="hidden w-80 border-l border-white/10 bg-slate-900 md:flex md:flex-col"><div className="flex items-center justify-between border-b border-white/10 p-4"><h2 className="font-semibold">{chat ? 'Chat' : 'Participants'}</h2><button onClick={() => { setChat(false); setPeople(false); }} aria-label="Close"><X size={18}/></button></div>{chat ? <><div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">{messages.length ? messages.map((m) => <div key={m.id}><p className="text-xs text-slate-500">{m.senderName || 'Participant'}</p><p className="mt-1 break-words rounded-xl bg-white/5 px-3 py-2 text-sm">{m.deletedAt ? '[Message deleted]' : m.content}</p></div>) : <p className="mt-8 text-center text-sm text-slate-500">No messages yet.</p>}</div><div className="border-t border-white/10 p-3"><div className="flex gap-2"><input value={messageText} onChange={(e) => setMessageText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} className="min-w-0 flex-1 rounded-xl bg-white/5 px-3 py-2 text-sm outline-none" placeholder="Type a message…"/><button onClick={sendMessage} className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-500" aria-label="Send message"><Send size={16}/></button></div></div></> : <div className="space-y-2 overflow-y-auto p-4">{participants.map((p) => <div key={p.uid} className="flex items-center gap-3 rounded-xl bg-white/5 p-3"><div className="grid h-9 w-9 place-items-center rounded-full bg-indigo-500/30 text-sm font-semibold">{(p.displayName || 'U').charAt(0).toUpperCase()}</div><div className="min-w-0"><p className="truncate text-sm">{p.displayName || 'User'}</p><p className="text-xs text-slate-500">{p.role === 'host' ? 'Host' : 'Participant'}</p></div></div>)}</div>}</aside>}</section>
-    <footer className="flex h-20 items-center justify-center gap-2 border-t border-white/10 bg-slate-950 px-4"><button onClick={() => toggle('audio')} aria-label={audio ? 'Mute microphone' : 'Unmute microphone'} className={`grid h-12 w-12 place-items-center rounded-full ${audio ? 'bg-slate-800' : 'bg-red-500'}`}>{audio ? <Mic/> : <MicOff/>}</button><button onClick={() => toggle('video')} aria-label={video ? 'Turn camera off' : 'Turn camera on'} className={`grid h-12 w-12 place-items-center rounded-full ${video ? 'bg-slate-800' : 'bg-red-500'}`}>{video ? <Video/> : <VideoOff/>}</button><button onClick={share} aria-label={sharing ? 'Stop sharing' : 'Share screen'} className={`grid h-12 w-12 place-items-center rounded-full ${sharing ? 'bg-indigo-500' : 'bg-slate-800'}`}><MonitorUp/></button><button onClick={() => { setPeople(false); setChat((v) => !v); }} aria-label="Chat" className={`grid h-12 w-12 place-items-center rounded-full ${chat ? 'bg-indigo-500' : 'bg-slate-800'}`}><MessageSquare/></button><button onClick={() => { setChat(false); setPeople((v) => !v); }} aria-label="Participants" className={`grid h-12 w-12 place-items-center rounded-full ${people ? 'bg-indigo-500' : 'bg-slate-800'}`}><Users/></button><button onClick={leave} aria-label="Leave meeting" className="ml-2 grid h-12 w-14 place-items-center rounded-full bg-red-500"><PhoneOff/></button></footer>
+    <footer className="flex h-20 items-center justify-center gap-2 border-t border-white/10 bg-slate-950 px-4"><button onClick={() => void toggle('audio')} aria-label={audio ? 'Mute microphone' : 'Unmute microphone'} className={`grid h-12 w-12 place-items-center rounded-full ${audio ? 'bg-slate-800' : 'bg-red-500'}`}>{audio ? <Mic/> : <MicOff/>}</button><button onClick={() => void toggle('video')} aria-label={video ? 'Turn camera off' : 'Turn camera on'} className={`grid h-12 w-12 place-items-center rounded-full ${video ? 'bg-slate-800' : 'bg-red-500'}`}>{video ? <Video/> : <VideoOff/>}</button><button onClick={share} aria-label={sharing ? 'Stop sharing' : 'Share screen'} className={`grid h-12 w-12 place-items-center rounded-full ${sharing ? 'bg-indigo-500' : 'bg-slate-800'}`}><MonitorUp/></button><button onClick={copy} aria-label="Share meeting link" className="grid h-12 w-12 place-items-center rounded-full bg-slate-800"><Share2/></button><button onClick={() => { setPeople(false); setChat((v) => !v); }} aria-label="Chat" className={`grid h-12 w-12 place-items-center rounded-full ${chat ? 'bg-indigo-500' : 'bg-slate-800'}`}><MessageSquare/></button><button onClick={() => { setChat(false); setPeople((v) => !v); }} aria-label="Participants" className={`grid h-12 w-12 place-items-center rounded-full ${people ? 'bg-indigo-500' : 'bg-slate-800'}`}><Users/></button><button onClick={leave} aria-label="Leave meeting" className="ml-2 grid h-12 w-14 place-items-center rounded-full bg-red-500"><PhoneOff/></button></footer>
   </main>;
 }
