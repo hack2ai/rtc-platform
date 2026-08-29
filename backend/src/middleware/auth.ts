@@ -7,13 +7,46 @@ import { logger } from '../utils/logger';
 export const authenticate = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const header = req.headers.authorization;
-    if (!header?.startsWith('Bearer ')) { sendError(res, 'No token provided', 401); return; }
-    const token = header.split('Bearer ')[1];
-    const decoded = await auth.verifyIdToken(token);
+    if (!header?.startsWith('Bearer ')) {
+      sendError(res, 'No token provided', 401);
+      return;
+    }
+
+    const token = header.slice('Bearer '.length).trim();
+    if (!token) {
+      sendError(res, 'No token provided', 401);
+      return;
+    }
+
+    const decoded = await auth.verifyIdToken(token, false);
     const userDoc = await db.collection('users').doc(decoded.uid).get();
-    req.user = { uid: decoded.uid, email: decoded.email || '', displayName: decoded.name, role: userDoc.data()?.role || 'user' };
+    req.user = {
+      uid: decoded.uid,
+      email: decoded.email || '',
+      displayName: decoded.name,
+      role: userDoc.data()?.role || 'user',
+    };
     next();
-  } catch (e) { logger.error('Auth error:', e); sendError(res, 'Invalid token', 401); }
+  } catch (error: any) {
+    const code = typeof error?.code === 'string' ? error.code : 'unknown';
+    const message = typeof error?.message === 'string' ? error.message : 'Unknown Firebase token verification error';
+    logger.error(`Firebase ID token verification failed [${code}]: ${message}`);
+
+    if (code === 'auth/id-token-expired') {
+      sendError(res, 'Firebase session expired. Please sign in again.', 401);
+      return;
+    }
+    if (code === 'auth/id-token-revoked') {
+      sendError(res, 'Firebase session revoked. Please sign in again.', 401);
+      return;
+    }
+    if (code === 'auth/argument-error' || code === 'auth/invalid-id-token') {
+      sendError(res, 'Firebase ID token is malformed or invalid.', 401);
+      return;
+    }
+
+    sendError(res, `Invalid token (${code})`, 401);
+  }
 };
 
 export const requireAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
