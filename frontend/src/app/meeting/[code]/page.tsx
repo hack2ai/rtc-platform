@@ -14,7 +14,7 @@ type Peer = { pc: RTCPeerConnection };
 const fallbackIce: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 const getShareBase = () =>
-  (process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
+  typeof window !== 'undefined' ? window.location.origin.replace(/\/$/, '') : '';
 
 export default function MeetingRoom() {
   const { code } = useParams<{ code: string }>();
@@ -115,6 +115,25 @@ export default function MeetingRoom() {
     })();
     return () => { mounted = false; };
   }, [code, router]);
+
+  useEffect(() => {
+    if (!meeting?.id || status !== 'Waiting for host approval') return;
+    const uid = firebaseAuth.currentUser?.uid;
+    if (!uid) return;
+    let active = true;
+    const checkApproval = async () => {
+      try {
+        const result = await api.get<any>(`/meetings/${meeting.id}`);
+        const current = result.data?.data;
+        if (active && current?.participants?.includes(uid)) {
+          window.location.reload();
+        }
+      } catch { /* keep polling while waiting */ }
+    };
+    void checkApproval();
+    const timer = window.setInterval(checkApproval, 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [meeting?.id, status]);
 
   useEffect(() => { if (videoRef.current && stream) videoRef.current.srcObject = stream; }, [stream]);
 
@@ -232,6 +251,17 @@ export default function MeetingRoom() {
     }
   };
 
+  const moveParticipant = async (userId: string, approve: boolean) => {
+    if (!meeting?.id) return;
+    try {
+      await api.post(`/meetings/${meeting.id}/${approve ? 'approve' : 'deny'}/${encodeURIComponent(userId)}`, {});
+      setParticipants((current) => current.map((p) => p.uid === userId ? { ...p, status: approve ? 'active' : 'removed' } : p).filter((p) => p.status !== 'removed'));
+      toast.success(approve ? 'Participant approved' : 'Participant denied');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || `Unable to ${approve ? 'approve' : 'deny'} participant`);
+    }
+  };
+
   const share = async () => {
     if (sharing) { screenStreamRef.current?.getTracks().forEach((t) => t.stop()); screenStreamRef.current = null; setSharing(false); return; }
     try {
@@ -266,9 +296,10 @@ export default function MeetingRoom() {
   if (status === 'Waiting for host approval') return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-white/[0.04] p-8 text-center"><Shield className="mx-auto text-indigo-400" size={32}/><h1 className="mt-4 text-2xl font-semibold">Waiting for approval</h1><p className="mt-2 text-sm text-slate-400">The host has been notified. Keep this tab open while you wait.</p><button onClick={leave} className="mt-6 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-slate-950">Leave waiting room</button></div></main>;
   if (status !== 'Connected') return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white"><div className="text-center"><h1 className="text-xl font-semibold">Unable to join meeting</h1><p className="mt-2 text-sm text-slate-400">Check the meeting code, your network connection, and authentication.</p><button onClick={() => router.replace('/dashboard')} className="mt-4 rounded-xl bg-indigo-500 px-5 py-2 text-sm font-semibold">Back to dashboard</button></div></main>;
 
+  const isHost = meeting?.hostId === firebaseAuth.currentUser?.uid;
   return <main className="flex h-screen flex-col bg-slate-950 text-white">
     <header className="flex h-16 items-center justify-between border-b border-white/10 px-5"><div><p className="font-semibold">{meeting?.title || 'RTC Meeting'}</p><button onClick={copy} className="mt-0.5 flex items-center gap-1 text-xs text-slate-400 hover:text-white" aria-label="Copy invite link">{code}<Copy size={12}/>{copied && ' Copied'}</button></div><div className="flex items-center gap-3 text-slate-400"><Shield size={16}/><span className="hidden text-xs sm:inline">{participants.length} participant{participants.length === 1 ? '' : 's'}</span></div></header>
-    <section className="flex min-h-0 flex-1"><div className="relative flex-1 overflow-auto p-4"><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={videoRef} autoPlay muted playsInline className={`h-full w-full object-cover ${video || sharing ? '' : 'hidden'}`}/>{!video && !sharing && <div className="absolute inset-0 grid place-items-center"><div className="grid h-20 w-20 place-items-center rounded-full bg-slate-800 text-2xl font-semibold">U</div></div>}<span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">You</span>{sharing && <span className="absolute right-3 top-3 rounded-lg bg-emerald-500/90 px-2.5 py-1 text-xs font-medium">Screen sharing</span>}</div>{participants.map((p) => { const id = p.uid; if (!id || id === firebaseAuth.currentUser?.uid) return null; return <div key={id} className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={(el) => { remoteRefs.current[id] = el; }} autoPlay playsInline className="h-full w-full object-cover"/><span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">{p.displayName || 'Participant'}</span></div>; })}</div></div>{(chat || people) && <aside className="hidden w-80 border-l border-white/10 bg-slate-900 md:flex md:flex-col"><div className="flex items-center justify-between border-b border-white/10 p-4"><h2 className="font-semibold">{chat ? 'Chat' : 'Participants'}</h2><button onClick={() => { setChat(false); setPeople(false); }} aria-label="Close"><X size={18}/></button></div>{chat ? <><div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">{messages.length ? messages.map((m) => <div key={m.id}><p className="text-xs text-slate-500">{m.senderName || 'Participant'}</p><p className="mt-1 break-words rounded-xl bg-white/5 px-3 py-2 text-sm">{m.deletedAt ? '[Message deleted]' : m.content}</p></div>) : <p className="mt-8 text-center text-sm text-slate-500">No messages yet.</p>}</div><div className="border-t border-white/10 p-3"><div className="flex gap-2"><input value={messageText} onChange={(e) => setMessageText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} className="min-w-0 flex-1 rounded-xl bg-white/5 px-3 py-2 text-sm outline-none" placeholder="Type a message…"/><button onClick={sendMessage} className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-500" aria-label="Send message"><Send size={16}/></button></div></div></> : <div className="space-y-2 overflow-y-auto p-4">{participants.map((p) => <div key={p.uid} className="flex items-center gap-3 rounded-xl bg-white/5 p-3"><div className="grid h-9 w-9 place-items-center rounded-full bg-indigo-500/30 text-sm font-semibold">{(p.displayName || 'U').charAt(0).toUpperCase()}</div><div className="min-w-0"><p className="truncate text-sm">{p.displayName || 'User'}</p><p className="text-xs text-slate-500">{p.role === 'host' ? 'Host' : 'Participant'}</p></div></div>)}</div>}</aside>}</section>
+    <section className="flex min-h-0 flex-1"><div className="relative flex-1 overflow-auto p-4"><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={videoRef} autoPlay muted playsInline className={`h-full w-full object-cover ${video || sharing ? '' : 'hidden'}`}/>{!video && !sharing && <div className="absolute inset-0 grid place-items-center"><div className="grid h-20 w-20 place-items-center rounded-full bg-slate-800 text-2xl font-semibold">U</div></div>}<span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">You</span>{sharing && <span className="absolute right-3 top-3 rounded-lg bg-emerald-500/90 px-2.5 py-1 text-xs font-medium">Screen sharing</span>}</div>{participants.map((p) => { const id = p.uid; if (!id || id === firebaseAuth.currentUser?.uid || p.status === 'waiting') return null; return <div key={id} className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={(el) => { remoteRefs.current[id] = el; }} autoPlay playsInline className="h-full w-full object-cover"/><span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">{p.displayName || 'Participant'}</span></div>; })}</div></div>{(chat || people) && <aside className="hidden w-80 border-l border-white/10 bg-slate-900 md:flex md:flex-col"><div className="flex items-center justify-between border-b border-white/10 p-4"><h2 className="font-semibold">{chat ? 'Chat' : 'Participants'}</h2><button onClick={() => { setChat(false); setPeople(false); }} aria-label="Close"><X size={18}/></button></div>{chat ? <><div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">{messages.length ? messages.map((m) => <div key={m.id}><p className="text-xs text-slate-500">{m.senderName || 'Participant'}</p><p className="mt-1 break-words rounded-xl bg-white/5 px-3 py-2 text-sm">{m.deletedAt ? '[Message deleted]' : m.content}</p></div>) : <p className="mt-8 text-center text-sm text-slate-500">No messages yet.</p>}</div><div className="border-t border-white/10 p-3"><div className="flex gap-2"><input value={messageText} onChange={(e) => setMessageText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} className="min-w-0 flex-1 rounded-xl bg-white/5 px-3 py-2 text-sm outline-none" placeholder="Type a message…"/><button onClick={sendMessage} className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-500" aria-label="Send message"><Send size={16}/></button></div></div></> : <div className="space-y-2 overflow-y-auto p-4">{participants.map((p) => <div key={p.uid} className="rounded-xl bg-white/5 p-3"><div className="flex items-center gap-3"><div className="grid h-9 w-9 place-items-center rounded-full bg-indigo-500/30 text-sm font-semibold">{(p.displayName || 'U').charAt(0).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="truncate text-sm">{p.displayName || 'User'}</p><p className="text-xs text-slate-500">{p.role === 'host' ? 'Host' : p.status === 'waiting' ? 'Waiting for approval' : 'Participant'}</p></div></div>{isHost && p.role !== 'host' && p.status === 'waiting' && <div className="mt-3 flex gap-2"><button onClick={() => void moveParticipant(p.uid, true)} className="flex-1 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950">Approve</button><button onClick={() => void moveParticipant(p.uid, false)} className="flex-1 rounded-lg bg-red-500 px-3 py-2 text-xs font-semibold text-white">Deny</button></div>}</div>)}</div>}</aside>}</section>
     <footer className="flex h-20 items-center justify-center gap-2 border-t border-white/10 bg-slate-950 px-4"><button onClick={() => void toggle('audio')} aria-label={audio ? 'Mute microphone' : 'Unmute microphone'} className={`grid h-12 w-12 place-items-center rounded-full ${audio ? 'bg-slate-800' : 'bg-red-500'}`}>{audio ? <Mic/> : <MicOff/>}</button><button onClick={() => void toggle('video')} aria-label={video ? 'Turn camera off' : 'Turn camera on'} className={`grid h-12 w-12 place-items-center rounded-full ${video ? 'bg-slate-800' : 'bg-red-500'}`}>{video ? <Video/> : <VideoOff/>}</button><button onClick={share} aria-label={sharing ? 'Stop sharing' : 'Share screen'} className={`grid h-12 w-12 place-items-center rounded-full ${sharing ? 'bg-indigo-500' : 'bg-slate-800'}`}><MonitorUp/></button><button onClick={copy} aria-label="Share meeting link" className="grid h-12 w-12 place-items-center rounded-full bg-slate-800"><Share2/></button><button onClick={() => { setPeople(false); setChat((v) => !v); }} aria-label="Chat" className={`grid h-12 w-12 place-items-center rounded-full ${chat ? 'bg-indigo-500' : 'bg-slate-800'}`}><MessageSquare/></button><button onClick={() => { setChat(false); setPeople((v) => !v); }} aria-label="Participants" className={`grid h-12 w-12 place-items-center rounded-full ${people ? 'bg-indigo-500' : 'bg-slate-800'}`}><Users/></button><button onClick={leave} aria-label="Leave meeting" className="ml-2 grid h-12 w-14 place-items-center rounded-full bg-red-500"><PhoneOff/></button></footer>
   </main>;
 }
