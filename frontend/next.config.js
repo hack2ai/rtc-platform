@@ -1,5 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Allow the desktop LAN address to load Next.js development assets.
+  // Set NEXT_PUBLIC_APP_HOST when using a different LAN hostname/IP.
+  allowedDevOrigins: [
+    'localhost',
+    '127.0.0.1',
+    process.env.NEXT_PUBLIC_APP_HOST || '192.168.100.10',
+  ],
   reactStrictMode: true,
   output: 'standalone',
   images: {

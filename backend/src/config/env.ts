@@ -14,6 +14,7 @@ export const ENV = {
   PORT: Number(process.env.PORT || 8080),
   NODE_ENV: process.env.NODE_ENV || 'development',
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
+  CORS_ORIGINS: (process.env.CORS_ORIGINS || '').split(',').map((value) => value.trim()).filter(Boolean),
   FIREBASE_PROJECT_ID: required('FIREBASE_PROJECT_ID'),
   FIREBASE_CLIENT_EMAIL: required('FIREBASE_CLIENT_EMAIL'),
   FIREBASE_PRIVATE_KEY: required('FIREBASE_PRIVATE_KEY').replace(/\\n/g, '\n'),
