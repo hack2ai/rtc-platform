@@ -1,11 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Allow the desktop LAN address to load Next.js development assets.
-  // Set NEXT_PUBLIC_APP_HOST when using a different LAN hostname/IP.
+  // Allow local/LAN hosts and the current ngrok development host to load
+  // Next.js development assets when testing the app through a tunnel.
   allowedDevOrigins: [
     'localhost',
     '127.0.0.1',
     process.env.NEXT_PUBLIC_APP_HOST || '192.168.100.10',
+    '816c-89-38-97-206.ngrok-free.app',
   ],
   reactStrictMode: true,
   output: 'standalone',
