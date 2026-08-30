@@ -82,8 +82,6 @@ export default function MeetingRoom() {
     element.autoplay = true;
     element.playsInline = true;
     void element.play().catch(async () => {
-      // Some mobile browsers block autoplay with audio. Muted autoplay still
-      // renders the remote video; the user can tap the tile to enable sound.
       element.muted = true;
       try { await element.play(); } catch { /* user gesture may still be required */ }
     });
@@ -278,7 +276,7 @@ export default function MeetingRoom() {
       }
     })();
     return () => { alive = false; };
-  }, [acquireInitialMedia, code, requestMedia, router]);
+  }, [code, requestMedia, router]);
 
   useEffect(() => {
     if (localVideoRef.current && stream) localVideoRef.current.srcObject = sharing && screenRef.current ? screenRef.current : stream;
@@ -307,13 +305,9 @@ export default function MeetingRoom() {
         if (!state) continue;
         const { pc } = state;
         try {
-          if (data.type === 'hello') {
-            continue;
-          }
+          if (data.type === 'hello') continue;
           if (data.type === 'offer') {
-            if (state.polite && pc.signalingState !== 'stable') {
-              await pc.setLocalDescription({ type: 'rollback' });
-            }
+            if (state.polite && pc.signalingState !== 'stable') await pc.setLocalDescription({ type: 'rollback' });
             if (pc.signalingState !== 'stable') continue;
             await pc.setRemoteDescription(data.payload);
             for (const candidate of state.pendingCandidates.splice(0)) await pc.addIceCandidate(candidate);
@@ -348,6 +342,7 @@ export default function MeetingRoom() {
         const list: Participant[] = Array.isArray(result.data?.data) ? result.data.data : [];
         if (!active) return;
         setParticipants(list);
+        const activeIds = new Set(list.filter((p) => p.status !== 'waiting').map((p) => p.uid));
         for (const participant of list) {
           if (!participant.uid || participant.uid === uid || participant.status === 'waiting') continue;
           await createPeer(meeting.id, participant.uid);
@@ -357,7 +352,6 @@ export default function MeetingRoom() {
             await sendSignal(meeting.id, participant.uid, 'hello', { protocol: 3 });
           }
         }
-        const activeIds = new Set(list.filter((p) => p.status !== 'waiting').map((p) => p.uid));
         for (const [id, state] of Object.entries(peers.current)) {
           if (!activeIds.has(id)) {
             try { state.pc.close(); } catch { /* noop */ }
