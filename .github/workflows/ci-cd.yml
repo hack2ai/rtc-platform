@@ -13,9 +13,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NODE_VERSION: '20'
+
 jobs:
-  test-backend:
-    name: Backend • install, build & test
+  backend:
+    name: Backend • typecheck, build & test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -23,16 +26,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
           cache-dependency-path: backend/package.json
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build
         run: npm run build
+
       - name: Test
         run: npm test
         env:
@@ -43,8 +53,8 @@ jobs:
           FIREBASE_STORAGE_BUCKET: test
           JWT_SECRET: test-secret
 
-  test-frontend:
-    name: Frontend • install & production build
+  frontend:
+    name: Frontend • typecheck, build & test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -52,14 +62,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
           cache-dependency-path: frontend/package.json
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8080/api
+          NEXT_PUBLIC_FIREBASE_API_KEY: test
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: test.firebaseapp.com
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: test
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: test.appspot.com
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123'
+          NEXT_PUBLIC_FIREBASE_APP_ID: test
+
       - name: Production build
         run: npm run build
         env:
@@ -71,9 +95,12 @@ jobs:
           NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123'
           NEXT_PUBLIC_FIREBASE_APP_ID: test
 
+      - name: Test
+        run: npm test
+
   deploy-backend:
     name: Deploy backend • Render
-    needs: test-backend
+    needs: backend
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     env:
@@ -95,7 +122,7 @@ jobs:
 
   deploy-frontend:
     name: Deploy frontend • Vercel
-    needs: test-frontend
+    needs: frontend
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     env:
@@ -106,18 +133,22 @@ jobs:
       - name: Checkout
         if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
         uses: actions/checkout@v5
+
       - name: Setup Node.js
         if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Install Vercel CLI
         if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
         run: npm install --global vercel
+
       - name: Deploy to Vercel
         if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
         working-directory: ./frontend
         run: vercel --prod --token="$VERCEL_TOKEN"
+
       - name: Deployment not configured
         if: env.VERCEL_TOKEN == '' || env.VERCEL_ORG_ID == '' || env.VERCEL_PROJECT_ID == ''
         run: echo "Vercel deployment skipped — repository secrets are not configured."
