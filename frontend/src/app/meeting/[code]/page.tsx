@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, type User } from 'firebase/auth';
 import { addDoc, collection, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { useParams, useRouter } from 'next/navigation';
 import { Copy, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Send, Share2, Shield, Users, Video, VideoOff, X } from 'lucide-react';
@@ -31,27 +31,23 @@ function normalizeCode(input: string) {
     const marker = '/meeting/';
     const index = url.pathname.indexOf(marker);
     return decodeURIComponent(index >= 0 ? url.pathname.slice(index + marker.length) : url.pathname.replace(/^\/+/, ''))
-      .split(/[?#]/)[0]
-      .replace(/^\/|\/$/g, '');
+      .split(/[?#]/)[0].replace(/^\/|\/$/g, '');
   } catch {
     const marker = '/meeting/';
     const index = value.indexOf(marker);
     return decodeURIComponent(index >= 0 ? value.slice(index + marker.length) : value)
-      .split(/[?#]/)[0]
-      .replace(/^\/|\/$/g, '');
+      .split(/[?#]/)[0].replace(/^\/|\/$/g, '');
   }
 }
 
-const shareBase = () => (typeof window === 'undefined' ? '' : window.location.origin.replace(/\/$/, ''));
-
 function waitForAuth(timeoutMs = 10000) {
   return new Promise<User | null>((resolve) => {
-    let settled = false;
+    let done = false;
     let timer: number | null = null;
     let unsubscribe = () => undefined;
     const finish = (user: User | null) => {
-      if (settled) return;
-      settled = true;
+      if (done) return;
+      done = true;
       if (timer) window.clearTimeout(timer);
       unsubscribe();
       resolve(user);
@@ -62,16 +58,7 @@ function waitForAuth(timeoutMs = 10000) {
   });
 }
 
-async function acquireMedia(requestMedia: (video: boolean, audio: boolean) => Promise<MediaStream>) {
-  for (const [wantVideo, wantAudio] of [[true, true], [true, false], [false, true]] as Array<[boolean, boolean]>) {
-    try {
-      return await requestMedia(wantVideo, wantAudio);
-    } catch (error) {
-      console.warn('[WebRTC] getUserMedia failed', { wantVideo, wantAudio, error });
-    }
-  }
-  return null;
-}
+const shareBase = () => typeof window === 'undefined' ? '' : window.location.origin.replace(/\/$/, '');
 
 export default function MeetingRoom() {
   const params = useParams<{ code: string }>();
@@ -81,12 +68,12 @@ export default function MeetingRoom() {
   const remoteRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const remoteStreams = useRef<Record<string, MediaStream | null>>({});
   const peers = useRef<Record<string, PeerState>>({});
-  const helloSent = useRef<Record<string, boolean>>({});
   const streamRef = useRef<MediaStream | null>(null);
   const screenRef = useRef<MediaStream | null>(null);
   const signalUnsub = useRef<(() => void) | null>(null);
   const participantTimer = useRef<number | null>(null);
   const participantRequestActive = useRef(false);
+  const helloSent = useRef<Record<string, boolean>>({});
 
   const [audio, setAudio] = useState(true);
   const [video, setVideo] = useState(true);
@@ -98,22 +85,19 @@ export default function MeetingRoom() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [meeting, setMeeting] = useState<any>(null);
-  const [status, setStatus] = useState('Connecting…');
+  const [status, setStatus] = useState('Checking sign-in…');
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [iceServers, setIceServers] = useState<RTCIceServer[]>(fallbackIce);
   const [, forceRemoteRender] = useState(0);
 
   const attachRemoteStream = useCallback((uid: string) => {
-    const element = remoteRefs.current[uid];
+    const el = remoteRefs.current[uid];
     const remote = remoteStreams.current[uid];
-    if (!element || !remote) return;
-    if (element.srcObject !== remote) element.srcObject = remote;
-    element.autoplay = true;
-    element.playsInline = true;
-    void element.play().catch(async () => {
-      element.muted = true;
-      try { await element.play(); } catch { /* user gesture may be required */ }
-    });
+    if (!el || !remote) return;
+    if (el.srcObject !== remote) el.srcObject = remote;
+    el.autoplay = true;
+    el.playsInline = true;
+    void el.play().catch(() => undefined);
   }, []);
 
   const signalPath = useCallback((meetingId: string, targetId: string) =>
@@ -123,7 +107,9 @@ export default function MeetingRoom() {
     const senderId = firebaseAuth.currentUser?.uid;
     if (!senderId || !targetId || senderId === targetId) return;
     try {
-      await addDoc(signalPath(meetingId, targetId), { senderId, targetId, type, payload, createdAt: serverTimestamp() });
+      await addDoc(signalPath(meetingId, targetId), {
+        senderId, targetId, type, payload, createdAt: serverTimestamp(),
+      });
       console.info('[WebRTC] signaling sent', { type, targetId });
     } catch (error) {
       console.error('[WebRTC] signaling write failed', { type, targetId, error });
@@ -150,7 +136,6 @@ export default function MeetingRoom() {
   const createPeer = useCallback(async (meetingId: string, targetId: string) => {
     const uid = firebaseAuth.currentUser?.uid;
     if (!uid || !targetId || uid === targetId) return null;
-
     const existing = peers.current[targetId];
     if (existing && !['closed', 'failed'].includes(existing.pc.connectionState)) {
       if (uid < targetId) void startOffer(meetingId, targetId, existing);
@@ -185,9 +170,7 @@ export default function MeetingRoom() {
     pc.onconnectionstatechange = () => {
       console.info('[WebRTC] connection state', { targetId, state: pc.connectionState });
       if (pc.connectionState === 'connected') setStatus('Connected');
-      if (pc.connectionState === 'failed') {
-        try { pc.restartIce(); } catch { /* noop */ }
-      }
+      if (pc.connectionState === 'failed') { try { pc.restartIce(); } catch { /* noop */ } }
       if (pc.connectionState === 'closed') {
         delete peers.current[targetId];
         remoteStreams.current[targetId] = null;
@@ -221,73 +204,77 @@ export default function MeetingRoom() {
   useEffect(() => {
     let alive = true;
     void (async () => {
-      if (!code) {
-        setStatus('Unable to join');
-        toast.error('Invalid meeting link');
-        return;
-      }
-      setStatus('Checking sign-in…');
+      if (!code) { setStatus('Unable to join'); toast.error('Invalid meeting link'); return; }
       const user = await waitForAuth();
       if (!alive) return;
-      if (!user) {
-        setStatus('Unable to join');
-        router.replace(`/login?next=${encodeURIComponent(window.location.pathname)}`);
-        return;
-      }
-
+      if (!user) { setStatus('Unable to join'); router.replace(`/login?next=${encodeURIComponent(window.location.pathname)}`); return; }
       try {
         setStatus('Joining meeting…');
-        console.info('[WebRTC] bootstrap start', { code, uid: user.uid });
+        console.info('[Meeting] bootstrap start', { code, uid: user.uid });
         const meta = (await api.get<any>(`/meetings/code/${encodeURIComponent(code)}`)).data?.data;
         if (!meta?.id) throw new Error('Meeting not found');
         const joined = (await api.post<any>(`/meetings/${meta.id}/join`, {})).data?.data;
         if (!alive) return;
         setMeeting({ ...meta, ...joined?.meeting });
-        if (joined?.status === 'waiting') {
-          setStatus('Waiting for host approval');
-          return;
-        }
+        if (joined?.status === 'waiting') { setStatus('Waiting for host approval'); return; }
 
         try {
           setStatus('Preparing connection…');
           const response = await api.get<any>('/meetings/ice-servers');
           const servers = response.data?.data?.iceServers;
           if (Array.isArray(servers) && servers.length) setIceServers(servers);
-        } catch (error) {
-          console.warn('[WebRTC] using fallback STUN', error);
-        }
+        } catch (error) { console.warn('[WebRTC] using fallback STUN', error); }
 
         setStatus('Starting camera…');
         const media = await Promise.race<MediaStream | null>([
-          acquireMedia(requestMedia),
+          (async () => {
+            for (const [wantVideo, wantAudio] of [[true, true], [true, false], [false, true]] as Array<[boolean, boolean]>) {
+              try { return await requestMedia(wantVideo, wantAudio); } catch (error) { console.warn('[Media] getUserMedia failed', { wantVideo, wantAudio, error }); }
+            }
+            return null;
+          })(),
           new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 12000)),
         ]);
-        if (!alive) {
-          media?.getTracks().forEach((track) => track.stop());
-          return;
-        }
+        if (!alive) { media?.getTracks().forEach((track) => track.stop()); return; }
         if (media) {
           streamRef.current = media;
           setStream(media);
           setAudio(media.getAudioTracks().some((track) => track.enabled));
           setVideo(media.getVideoTracks().some((track) => track.enabled));
         } else {
-          setAudio(false);
-          setVideo(false);
+          setAudio(false); setVideo(false);
           toast.error('Camera/microphone unavailable. You can still join.');
         }
         setStatus('Connected');
-        console.info('[WebRTC] bootstrap complete', { meetingId: meta.id, uid: user.uid });
+        console.info('[Meeting] bootstrap complete', { meetingId: meta.id, uid: user.uid });
       } catch (error: any) {
-        console.error('[WebRTC] bootstrap failed', error);
-        if (alive) {
-          setStatus('Unable to join');
-          toast.error(error?.response?.data?.error || error?.message || 'Unable to join meeting');
-        }
+        console.error('[Meeting] bootstrap failed', error);
+        if (alive) { setStatus('Unable to join'); toast.error(error?.response?.data?.error || error?.message || 'Unable to join meeting'); }
       }
     })();
     return () => { alive = false; };
   }, [code, requestMedia, router]);
+
+  useEffect(() => {
+    if (!meeting?.id || status !== 'Waiting for host approval') return;
+    const uid = firebaseAuth.currentUser?.uid;
+    if (!uid) return;
+    let active = true;
+    const check = async () => {
+      try {
+        const response = await api.get<any>(`/meetings/${meeting.id}`);
+        const current = response.data?.data;
+        if (active && Array.isArray(current?.participants) && current.participants.includes(uid)) {
+          window.location.reload();
+        }
+      } catch (error) {
+        console.warn('[Meeting] approval status check failed', error);
+      }
+    };
+    void check();
+    const timer = window.setInterval(check, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [meeting?.id, status]);
 
   useEffect(() => {
     if (localVideoRef.current && stream) localVideoRef.current.srcObject = sharing && screenRef.current ? screenRef.current : stream;
@@ -302,7 +289,6 @@ export default function MeetingRoom() {
     const uid = firebaseAuth.currentUser?.uid;
     if (!uid) return;
     let active = true;
-
     const incoming = collection(firestore, `meetings/${meeting.id}/signaling/${uid}/messages`);
     signalUnsub.current?.();
     signalUnsub.current = onSnapshot(incoming, async (snapshot) => {
@@ -326,10 +312,12 @@ export default function MeetingRoom() {
             const answer = pc.localDescription;
             if (!answer) throw new Error('Answer description missing');
             await sendSignal(meeting.id, senderId, 'answer', { type: answer.type, sdp: answer.sdp });
+            console.info('[WebRTC] answer sent', { targetId: senderId });
           } else if (data.type === 'answer') {
             if (state.pc.signalingState !== 'have-local-offer') continue;
             await state.pc.setRemoteDescription(data.payload);
             for (const candidate of state.pendingCandidates.splice(0)) await state.pc.addIceCandidate(candidate);
+            console.info('[WebRTC] answer applied', { targetId: senderId });
           } else if (data.type === 'candidate' && data.payload) {
             if (state.pc.remoteDescription) await state.pc.addIceCandidate(data.payload);
             else state.pendingCandidates.push(data.payload);
@@ -352,10 +340,9 @@ export default function MeetingRoom() {
         for (const participant of list) {
           if (!participant.uid || participant.uid === uid || participant.status === 'waiting') continue;
           await createPeer(meeting.id, participant.uid);
-          attachRemoteStream(participant.uid);
           if (!helloSent.current[participant.uid]) {
             helloSent.current[participant.uid] = true;
-            await sendSignal(meeting.id, participant.uid, 'hello', { protocol: 4 });
+            await sendSignal(meeting.id, participant.uid, 'hello', { protocol: 5 });
           }
         }
         for (const [id, state] of Object.entries(peers.current)) {
@@ -365,15 +352,11 @@ export default function MeetingRoom() {
             remoteStreams.current[id] = null;
           }
         }
-      } catch (error) {
-        console.error('[WebRTC] participant refresh failed', error);
-      } finally {
-        participantRequestActive.current = false;
-      }
+      } catch (error) { console.error('[WebRTC] participant refresh failed', error); }
+      finally { participantRequestActive.current = false; }
     };
-
     void refresh();
-    participantTimer.current = window.setInterval(refresh, 2000);
+    participantTimer.current = window.setInterval(refresh, 3000);
     return () => {
       active = false;
       if (participantTimer.current) window.clearInterval(participantTimer.current);
@@ -467,6 +450,19 @@ export default function MeetingRoom() {
     }
   };
 
+  const moveParticipant = async (userId: string, approve: boolean) => {
+    if (!meeting?.id) return;
+    try {
+      await api.post(`/meetings/${meeting.id}/${approve ? 'approve' : 'deny'}/${encodeURIComponent(userId)}`, {});
+      setParticipants((current) => approve
+        ? current.map((p) => p.uid === userId ? { ...p, status: 'active' } : p)
+        : current.filter((p) => p.uid !== userId));
+      toast.success(approve ? 'Participant approved' : 'Participant denied');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || `Unable to ${approve ? 'approve' : 'deny'} participant`);
+    }
+  };
+
   const leave = async () => {
     try { if (meeting?.id) await api.delete(`/meetings/${meeting.id}/leave`); } catch (error) { console.warn('[Meeting] leave failed', error); }
     Object.values(peers.current).forEach((state) => state.pc.close());
@@ -475,24 +471,56 @@ export default function MeetingRoom() {
     router.replace('/dashboard');
   };
 
+  if (status === 'Waiting for host approval') {
+    return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white">
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-white/[0.04] p-8 text-center shadow-2xl">
+        <Shield className="mx-auto text-indigo-400" size={36}/>
+        <h1 className="mt-4 text-2xl font-semibold">Waiting for approval</h1>
+        <p className="mt-2 text-sm text-slate-400">The host has been notified. This page will enter the meeting automatically after approval.</p>
+        <button type="button" onClick={leave} className="mt-6 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-slate-950">Leave waiting room</button>
+      </div>
+    </main>;
+  }
+  if (status === 'Unable to join') {
+    return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white"><div className="text-center"><h1 className="text-xl font-semibold">Unable to join meeting</h1><p className="mt-2 text-sm text-slate-400">Please reload and try the meeting link again.</p><button type="button" onClick={() => router.replace('/dashboard')} className="mt-4 rounded-xl bg-indigo-500 px-5 py-2 text-sm font-semibold">Back to dashboard</button></div></main>;
+  }
   if (status !== 'Connected') {
-    if (status === 'Waiting for host approval') {
-      return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white"><div className="max-w-md rounded-2xl border border-white/10 bg-white/5 p-8 text-center"><Shield className="mx-auto text-indigo-400" size={34}/><h1 className="mt-4 text-2xl font-semibold">Waiting for approval</h1><p className="mt-2 text-sm text-slate-400">The host needs to approve your entry.</p><button type="button" onClick={leave} className="mt-6 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-slate-950">Leave</button></div></main>;
-    }
-    if (status === 'Unable to join') {
-      return <main className="grid h-screen place-items-center bg-slate-950 px-6 text-white"><div className="text-center"><h1 className="text-xl font-semibold">Unable to join meeting</h1><p className="mt-2 text-sm text-slate-400">Please reload and try the meeting link again.</p><button type="button" onClick={() => router.replace('/dashboard')} className="mt-4 rounded-xl bg-indigo-500 px-5 py-2 text-sm font-semibold">Back to dashboard</button></div></main>;
-    }
     return <main className="grid h-screen place-items-center bg-slate-950 text-white"><div className="text-center"><div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-indigo-400"/><p>{status}</p></div></main>;
   }
 
   const uid = firebaseAuth.currentUser?.uid;
+  const isHost = meeting?.hostId === uid;
+  const waitingParticipants = participants.filter((p) => p.uid !== uid && p.status === 'waiting');
+
   return <main className="relative flex h-screen min-h-0 flex-col overflow-hidden bg-slate-950 text-white">
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4"><div className="min-w-0"><p className="truncate font-semibold">{meeting?.title || 'RTC Meeting'}</p><button type="button" onClick={() => void copyInvite()} className="flex items-center gap-1 text-xs text-slate-400"><span>{code}</span><Copy size={12}/>{copied && ' Copied'}</button></div><div className="flex items-center gap-2 text-xs text-slate-400"><Shield size={15}/>{participants.length} participants</div></header>
-    <section className="min-h-0 flex-1 overflow-auto p-3 pb-24 sm:p-4"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={localVideoRef} autoPlay muted playsInline className={`h-full w-full object-cover ${video || sharing ? '' : 'hidden'}`}/>{!video && !sharing && <div className="absolute inset-0 grid place-items-center text-2xl font-semibold">U</div>}<span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">You</span>{sharing && <span className="absolute right-3 top-3 rounded-lg bg-emerald-500 px-2 py-1 text-xs font-medium">Screen sharing</span>}</div>
-      {participants.map((participant) => { if (!participant.uid || participant.uid === uid || participant.status === 'waiting') return null; const hasStream = !!remoteStreams.current[participant.uid]; return <div key={participant.uid} className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={(element) => { remoteRefs.current[participant.uid] = element; if (element) attachRemoteStream(participant.uid); }} autoPlay playsInline className="h-full w-full object-cover" onClick={(event) => { const el = event.currentTarget; el.muted = !el.muted; void el.play().catch(() => undefined); }}/>{!hasStream && <div className="absolute inset-0 grid place-items-center text-sm text-slate-500">Connecting media…</div>}<span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">{participant.displayName || 'Participant'}</span></div>; })}
-    </div></section>
-    {(chat || people) && <aside className="absolute inset-y-16 right-0 z-50 flex w-[min(90vw,24rem)] flex-col border-l border-white/10 bg-slate-900 shadow-2xl"><div className="flex items-center justify-between border-b border-white/10 p-4"><h2 className="font-semibold">{chat ? 'Chat' : 'Participants'}</h2><button type="button" onClick={() => { setChat(false); setPeople(false); }}><X size={18}/></button></div>{chat ? <><div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">{messages.length ? messages.map((m) => <div key={m.id}><p className="text-xs text-slate-500">{m.senderName || 'Participant'}</p><p className="rounded-xl bg-white/5 px-3 py-2 text-sm">{m.deletedAt ? '[Message deleted]' : m.content}</p></div>) : <p className="text-center text-sm text-slate-500">No messages yet.</p>}</div><div className="border-t border-white/10 p-3"><div className="flex gap-2"><input value={messageText} onChange={(e) => setMessageText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void sendMessage()} className="min-w-0 flex-1 rounded-xl bg-white/5 px-3 py-2 text-sm outline-none" placeholder="Type a message…"/><button type="button" onClick={() => void sendMessage()} className="rounded-xl bg-indigo-500 px-3"><Send size={16}/></button></div></div></> : <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">{participants.map((p) => <div key={p.uid} className="rounded-xl bg-white/5 p-3"><p className="text-sm">{p.displayName || 'User'}</p><p className="text-xs text-slate-500">{p.role === 'host' ? 'Host' : p.status || 'Participant'}</p></div>)}</div>}</aside>}
-    <footer className="absolute bottom-0 left-0 right-0 z-40 flex min-h-20 items-center justify-center gap-2 border-t border-white/10 bg-slate-950/95 px-2 py-3 backdrop-blur"><button type="button" onClick={() => void toggle('audio')} aria-label={audio ? 'Mute microphone' : 'Unmute microphone'} className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${audio ? 'bg-slate-800' : 'bg-red-500'}`}>{audio ? <Mic/> : <MicOff/>}</button><button type="button" onClick={() => void toggle('video')} aria-label={video ? 'Turn camera off' : 'Turn camera on'} className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${video ? 'bg-slate-800' : 'bg-red-500'}`}>{video ? <Video/> : <VideoOff/>}</button><button type="button" onClick={() => void shareScreen()} aria-label={sharing ? 'Stop sharing' : 'Share screen'} className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${sharing ? 'bg-indigo-500' : 'bg-slate-800'}`}><MonitorUp/></button><button type="button" onClick={() => void copyInvite()} aria-label="Share meeting link" className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-800"><Share2/></button><button type="button" onClick={() => { setPeople(false); setChat((v) => !v); }} aria-label="Chat" className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${chat ? 'bg-indigo-500' : 'bg-slate-800'}`}><MessageSquare/></button><button type="button" onClick={() => { setChat(false); setPeople((v) => !v); }} aria-label="Participants" className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${people ? 'bg-indigo-500' : 'bg-slate-800'}`}><Users/></button><button type="button" onClick={() => void leave()} aria-label="Leave meeting" className="grid h-12 w-14 place-items-center rounded-full bg-red-500"><PhoneOff/></button></footer>
+    <header className="relative z-50 flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4 sm:px-5">
+      <div className="min-w-0"><p className="truncate font-semibold">{meeting?.title || 'RTC Meeting'}</p><button type="button" onClick={() => void copyInvite()} className="mt-0.5 flex items-center gap-1 text-xs text-slate-400 hover:text-white" aria-label="Copy invite link"><span>{code}</span><Copy size={12}/>{copied && ' Copied'}</button></div>
+      <div className="flex items-center gap-3 text-slate-400"><Shield size={16}/><span className="text-xs">{participants.length} participant{participants.length === 1 ? '' : 's'}</span></div>
+    </header>
+
+    {isHost && waitingParticipants.length > 0 && <div className="relative z-40 flex shrink-0 items-center justify-between gap-3 border-b border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm"><div className="min-w-0"><p className="font-medium text-amber-200">{waitingParticipants.length} participant{waitingParticipants.length === 1 ? '' : 's'} waiting for approval</p><p className="truncate text-xs text-amber-100/70">{waitingParticipants.map((p) => p.displayName || 'Participant').join(', ')}</p></div><button type="button" onClick={() => { setChat(false); setPeople(true); }} className="shrink-0 rounded-lg bg-amber-300 px-3 py-2 text-xs font-semibold text-slate-950">Review</button></div>}
+
+    <section className="relative z-0 flex min-h-0 flex-1 overflow-hidden">
+      <div className="relative min-w-0 flex-1 overflow-auto p-3 pb-24 sm:p-4 sm:pb-24"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={localVideoRef} autoPlay muted playsInline className={`h-full w-full object-cover ${video || sharing ? '' : 'hidden'}`}/>{!video && !sharing && <div className="absolute inset-0 grid place-items-center text-2xl font-semibold">U</div>}<span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">You</span>{sharing && <span className="absolute right-3 top-3 rounded-lg bg-emerald-500 px-2 py-1 text-xs font-medium">Screen sharing</span>}</div>
+        {participants.map((participant) => { if (!participant.uid || participant.uid === uid || participant.status === 'waiting') return null; const hasStream = !!remoteStreams.current[participant.uid]; return <div key={participant.uid} className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900"><video ref={(element) => { remoteRefs.current[participant.uid] = element; if (element) attachRemoteStream(participant.uid); }} autoPlay playsInline className="h-full w-full object-cover"/>{!hasStream && <div className="absolute inset-0 grid place-items-center text-sm text-slate-500">Connecting media…</div>}<span className="absolute bottom-3 left-3 rounded-lg bg-black/50 px-2.5 py-1 text-xs">{participant.displayName || 'Participant'}</span></div>; })}
+      </div></div>
+
+      {(chat || people) && <><button type="button" aria-label="Close panel" onClick={() => { setChat(false); setPeople(false); }} className="absolute inset-0 z-[60] bg-black/40 md:hidden"/><aside className="absolute top-0 bottom-20 right-0 z-[90] flex w-[min(90vw,24rem)] flex-col border-l border-white/10 bg-slate-900 shadow-2xl md:relative md:z-20 md:w-80 md:shadow-none">
+        <div className="flex shrink-0 items-center justify-between border-b border-white/10 p-4"><h2 className="font-semibold">{chat ? 'Chat' : 'Participants'}</h2><button type="button" onClick={() => { setChat(false); setPeople(false); }} aria-label="Close"><X size={18}/></button></div>
+        {chat ? <><div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">{messages.length ? messages.map((m) => <div key={m.id}><p className="text-xs text-slate-500">{m.senderName || 'Participant'}</p><p className="mt-1 break-words rounded-xl bg-white/5 px-3 py-2 text-sm">{m.deletedAt ? '[Message deleted]' : m.content}</p></div>) : <p className="mt-8 text-center text-sm text-slate-500">No messages yet.</p>}</div><div className="shrink-0 border-t border-white/10 bg-slate-900 p-3"><div className="flex gap-2"><input value={messageText} onChange={(e) => setMessageText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void sendMessage()} className="min-w-0 flex-1 rounded-xl bg-white/5 px-3 py-2 text-sm outline-none" placeholder="Type a message…"/><button type="button" onClick={() => void sendMessage()} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-indigo-500" aria-label="Send message"><Send size={16}/></button></div></div></>
+        : <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">{participants.length === 0 && <p className="text-sm text-slate-500">No participants found.</p>}{participants.map((p) => <div key={p.uid} className="rounded-xl bg-white/5 p-3"><div className="flex items-center gap-3"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-indigo-500/30 text-sm font-semibold">{(p.displayName || 'U').charAt(0).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="truncate text-sm">{p.displayName || 'User'}</p><p className="text-xs text-slate-500">{p.role === 'host' ? 'Host' : p.status === 'waiting' ? 'Waiting for approval' : p.status === 'active' ? 'Participant' : p.status}</p></div></div>{isHost && p.role !== 'host' && p.status === 'waiting' && <div className="mt-3 grid grid-cols-2 gap-2"><button type="button" onClick={() => void moveParticipant(p.uid, true)} className="min-h-10 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-emerald-400">Approve</button><button type="button" onClick={() => void moveParticipant(p.uid, false)} className="min-h-10 rounded-lg bg-red-500 px-3 py-2 text-xs font-bold text-white hover:bg-red-400">Deny</button></div>}</div>)}</div>}
+      </aside></>}
+    </section>
+
+    <footer className="absolute bottom-0 left-0 right-0 z-[80] flex min-h-20 items-center justify-center gap-2 border-t border-white/10 bg-slate-950/95 px-2 py-3 backdrop-blur sm:gap-3 sm:px-4">
+      <button type="button" onClick={() => void toggle('audio')} aria-label={audio ? 'Mute microphone' : 'Unmute microphone'} className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${audio ? 'bg-slate-800 hover:bg-slate-700' : 'bg-red-500 hover:bg-red-400'}`}>{audio ? <Mic/> : <MicOff/>}</button>
+      <button type="button" onClick={() => void toggle('video')} aria-label={video ? 'Turn camera off' : 'Turn camera on'} className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${video ? 'bg-slate-800 hover:bg-slate-700' : 'bg-red-500 hover:bg-red-400'}`}>{video ? <Video/> : <VideoOff/>}</button>
+      <button type="button" onClick={() => void shareScreen()} aria-label={sharing ? 'Stop sharing' : 'Share screen'} className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${sharing ? 'bg-indigo-500' : 'bg-slate-800 hover:bg-slate-700'}`}><MonitorUp/></button>
+      <button type="button" onClick={() => void copyInvite()} aria-label="Share meeting link" className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-800 hover:bg-slate-700"><Share2/></button>
+      <button type="button" onClick={() => { setPeople(false); setChat((value) => !value); }} aria-label="Chat" className={`grid h-12 w-12 shrink-0 place-items-center rounded-full ${chat ? 'bg-indigo-500' : 'bg-slate-800 hover:bg-slate-700'}`}><MessageSquare/></button>
+      <button type="button" onClick={() => { setChat(false); setPeople((value) => !value); }} aria-label="Participants" className={`relative grid h-12 w-12 shrink-0 place-items-center rounded-full ${people ? 'bg-indigo-500' : 'bg-slate-800 hover:bg-slate-700'}`}><Users/>{isHost && waitingParticipants.length > 0 && <span className="absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-slate-950">{waitingParticipants.length}</span>}</button>
+      <button type="button" onClick={() => void leave()} aria-label="Leave meeting" className="ml-1 grid h-12 w-14 shrink-0 place-items-center rounded-full bg-red-500 hover:bg-red-400"><PhoneOff/></button>
+    </footer>
   </main>;
 }
