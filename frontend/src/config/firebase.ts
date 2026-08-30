@@ -13,10 +13,18 @@ const firebaseConfig = {
 };
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
 export const firebaseAuth = getAuth(app);
-export const firestore = getFirestore(app);
+
+// The Firebase project already uses this named Firestore database.
+// Using getFirestore(app) alone targets the (default) database.
+const firestoreDatabaseId = 'ai-studio-d708adea-0ac2-46e6-98ae-db015f5d5c43';
+export const firestore = getFirestore(app, firestoreDatabaseId);
+
 export const firebaseStorage = getStorage(app);
+
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.addScope('profile');
 googleProvider.addScope('email');
+
 export default app;
