@@ -10,28 +10,42 @@ import toast from 'react-hot-toast';
 
 type Meeting = { id: string; code: string; title?: string; status?: string; createdAt?: any };
 
+const RECENT_CACHE_KEY = 'rtc-platform-recent-meetings-v1';
 const shareBase = () => (typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || '')).replace(/\/$/, '');
 
 const normalizeMeetingCode = (input: string) => {
   const value = input.trim();
   if (!value) return '';
-
   try {
     const url = new URL(value);
     const marker = '/meeting/';
     const index = url.pathname.indexOf(marker);
-    if (index >= 0) {
-      return decodeURIComponent(url.pathname.slice(index + marker.length)).replace(/^\/|\/$/g, '');
-    }
+    if (index >= 0) return decodeURIComponent(url.pathname.slice(index + marker.length)).replace(/^\/|\/$/g, '');
     return decodeURIComponent(url.pathname.replace(/^\/+|\/+$/g, ''));
   } catch {
     const marker = '/meeting/';
     const index = value.indexOf(marker);
-    if (index >= 0) {
-      return decodeURIComponent(value.slice(index + marker.length).split(/[?#]/)[0]).replace(/^\/|\/$/g, '');
-    }
+    if (index >= 0) return decodeURIComponent(value.slice(index + marker.length).split(/[?#]/)[0]).replace(/^\/|\/$/g, '');
     return value.replace(/^\/+|\/+$/g, '');
   }
+};
+
+const readCachedMeetings = (): Meeting[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(RECENT_CACHE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.slice(0, 10) : [];
+  } catch { return []; }
+};
+
+const writeCachedMeetings = (meetings: Meeting[]) => {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem(RECENT_CACHE_KEY, JSON.stringify(meetings.slice(0, 10))); } catch { /* cache is optional */ }
+};
+
+const isQuotaError = (error: any) => {
+  const text = String(error?.response?.data?.error || error?.message || '').toLowerCase();
+  return text.includes('quota') || text.includes('resource_exhausted') || text.includes('read units');
 };
 
 export default function DashboardPage() {
@@ -57,25 +71,25 @@ export default function DashboardPage() {
     setLoadingRecent(true);
     setRecentError(null);
     try {
-      let lastError: unknown = null;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          const response = await api.get<any>('/meetings', { page: 1, limit: 10 });
-          const payload = response.data?.data ?? response.data;
-          const items = Array.isArray(payload) ? payload : (payload?.items ?? payload?.data ?? []);
-          if (!Array.isArray(items)) throw new Error('Unexpected recent meetings response');
-          setRecentMeetings(items);
-          setRecentError(null);
-          return;
-        } catch (error) {
-          lastError = error;
-          if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 700));
-        }
-      }
-      throw lastError instanceof Error ? lastError : new Error('Unable to load recent meetings');
+      const response = await api.get<any>('/meetings', { page: 1, limit: 10 });
+      const payload = response.data?.data ?? response.data;
+      const items = Array.isArray(payload) ? payload : (payload?.items ?? payload?.data ?? []);
+      if (!Array.isArray(items)) throw new Error('Unexpected recent meetings response');
+      setRecentMeetings(items);
+      writeCachedMeetings(items);
     } catch (error: any) {
       console.error('Failed to load recent meetings:', error);
-      setRecentError(error?.response?.data?.error || error?.message || 'Unable to load recent meetings');
+      const cached = readCachedMeetings();
+      if (isQuotaError(error) && cached.length > 0) {
+        setRecentMeetings(cached);
+        setRecentError('Firestore read quota is temporarily exhausted. Showing meetings saved on this browser.');
+      } else if (isQuotaError(error)) {
+        setRecentMeetings([]);
+        setRecentError('Firestore read quota is temporarily exhausted. New and previously cached meetings will appear here when available.');
+      } else {
+        setRecentMeetings(cached);
+        setRecentError(cached.length > 0 ? 'Live meeting history is temporarily unavailable. Showing the saved local history.' : (error?.response?.data?.error || error?.message || 'Unable to load recent meetings'));
+      }
     } finally {
       setLoadingRecent(false);
     }
@@ -83,6 +97,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!user) return;
+    setRecentMeetings(readCachedMeetings());
     void loadRecentMeetings();
     const onFocus = () => { void loadRecentMeetings(); };
     window.addEventListener('focus', onFocus);
@@ -103,7 +118,11 @@ export default function DashboardPage() {
       setShowCreate(false);
       setTitle('');
       if(meeting?.code){
-        setRecentMeetings((current) => [meeting, ...current.filter((item) => item.id !== meeting.id)].slice(0, 10));
+        setRecentMeetings((current) => {
+          const next = [meeting, ...current.filter((item) => item.id !== meeting.id)].slice(0, 10);
+          writeCachedMeetings(next);
+          return next;
+        });
         router.push(`/meeting/${encodeURIComponent(meeting.code)}`);
       } else toast.error('Meeting created but no room code was returned');
     }catch(e:any){toast.error(e?.response?.data?.error||'Unable to create meeting')}
@@ -137,7 +156,7 @@ export default function DashboardPage() {
       </div>
 
       <div id="recent-meetings" className="mt-10 rounded-2xl border border-white/10 bg-white/[0.03] p-6"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-3"><Clock3 size={18} className="text-slate-400"/><h3 className="font-semibold">Recent meetings</h3></div><button onClick={()=>void loadRecentMeetings()} disabled={loadingRecent} className="inline-flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-white/10 disabled:opacity-50" title="Refresh recent meetings"><RefreshCw size={14} className={loadingRecent ? 'animate-spin' : ''}/> Refresh</button></div>
-        {loadingRecent ? <p className="mt-5 text-sm text-slate-500">Loading your meetings…</p> : recentError ? <div className="mt-5 rounded-xl border border-red-400/20 bg-red-500/5 p-4"><p className="text-sm font-medium text-red-200">Could not load recent meetings.</p><p className="mt-1 text-xs text-red-100/70">{recentError}</p><button onClick={()=>void loadRecentMeetings()} className="mt-3 rounded-lg bg-red-500/20 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/30">Try again</button></div> : recentMeetings.length === 0 ? <p className="mt-5 text-sm text-slate-500">No meetings yet. Create or join a meeting and it will appear here.</p> : <div className="mt-5 space-y-3">{recentMeetings.map((meeting)=><div key={meeting.id} className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="truncate font-medium">{meeting.title||'Untitled meeting'}</p><p className="mt-1 text-xs text-slate-500">Code: {meeting.code} · {meeting.status||'active'}</p></div><div className="flex shrink-0 gap-2"><button onClick={()=>router.push(`/meeting/${encodeURIComponent(meeting.code)}`)} className="inline-flex items-center gap-1 rounded-lg bg-indigo-500 px-3 py-2 text-xs font-semibold">Join <ExternalLink size={13}/></button><button onClick={()=>copyInvite(meeting.code)} className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold hover:bg-white/15"><Copy size={13}/> Copy link</button></div></div>)}</div>}
+        {loadingRecent && recentMeetings.length===0 ? <p className="mt-5 text-sm text-slate-500">Loading your meetings…</p> : recentError ? <div className="mt-5 rounded-xl border border-amber-400/20 bg-amber-500/5 p-4"><p className="text-sm font-medium text-amber-100">Live meeting history is temporarily unavailable.</p><p className="mt-1 text-xs text-amber-100/70">{recentError}</p></div> : recentMeetings.length === 0 ? <p className="mt-5 text-sm text-slate-500">No meetings yet. Create or join a meeting and it will appear here.</p> : <div className="mt-5 space-y-3">{recentMeetings.map((meeting)=><div key={meeting.id} className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="truncate font-medium">{meeting.title||'Untitled meeting'}</p><p className="mt-1 text-xs text-slate-500">Code: {meeting.code} · {meeting.status||'active'}</p></div><div className="flex shrink-0 gap-2"><button onClick={()=>router.push(`/meeting/${encodeURIComponent(meeting.code)}`)} className="inline-flex items-center gap-1 rounded-lg bg-indigo-500 px-3 py-2 text-xs font-semibold">Join <ExternalLink size={13}/></button><button onClick={()=>copyInvite(meeting.code)} className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold hover:bg-white/15"><Copy size={13}/> Copy link</button></div></div>)}</div>}
       </div>
     </section>
     {showCreate&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl"><h2 className="text-xl font-semibold">Create meeting</h2><p className="mt-1 text-sm text-slate-400">Give your meeting a recognizable name.</p><input autoFocus value={title} onChange={e=>setTitle(e.target.value)} placeholder="Team sync" className="mt-6 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-indigo-400"/><div className="mt-5 flex justify-end gap-2"><button disabled={busy} onClick={()=>setShowCreate(false)} className="rounded-xl px-4 py-2 text-sm text-slate-400">Cancel</button><button disabled={busy} onClick={create} className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold disabled:opacity-50">{busy?'Creating…':'Create room'}</button></div></div></div>}
