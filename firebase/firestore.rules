@@ -24,6 +24,17 @@ service cloud.firestore {
         allow update: if isMeetingHost(meetingId) || (isOwner(userId) && request.resource.data.uid == userId);
         allow delete: if isMeetingHost(meetingId) || isOwner(userId) || isAdmin();
       }
+      // Current RTC signaling is isolated per target user to avoid query/race issues.
+      match /signaling/{targetUserId}/messages/{signalId} {
+        allow read: if isAuth() && isMeetingMember(meetingId) && targetUserId == request.auth.uid;
+        allow create: if isMeetingMember(meetingId)
+          && targetUserId == request.resource.data.targetId
+          && request.resource.data.senderId == request.auth.uid
+          && targetUserId != request.auth.uid
+          && targetUserId in get(/databases/$(database)/documents/meetings/$(meetingId)).data.participants;
+        allow delete: if isMeetingHost(meetingId) || isAdmin();
+      }
+      // Backward compatibility for old signaling documents; new clients do not use this path.
       match /signaling/{signalId} {
         allow read: if isMeetingMember(meetingId) && resource.data.targetId == request.auth.uid;
         allow create: if isMeetingMember(meetingId) && request.resource.data.senderId == request.auth.uid && request.resource.data.targetId != request.auth.uid && request.resource.data.targetId in get(/databases/$(database)/documents/meetings/$(meetingId)).data.participants;

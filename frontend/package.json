@@ -5,6 +5,7 @@
   "description": "Next.js web client for RTC Platform",
   "scripts": {
     "dev": "next dev",
+    "typecheck": "tsc --noEmit",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

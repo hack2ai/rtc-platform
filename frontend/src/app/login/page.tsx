@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword } from 'firebase/auth';
 import { firebaseAuth, googleProvider } from '../../config/firebase';
@@ -8,7 +8,7 @@ import { api } from '../../config/api';
 import { Video, Mail, LockKeyhole } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = useMemo(() => {
@@ -73,5 +73,13 @@ export default function LoginPage() {
         <button disabled={busy||!email.trim()||!password} onClick={login} className="mt-5 w-full rounded-xl bg-indigo-500 px-4 py-3 text-sm font-semibold disabled:opacity-50">{busy?'Signing in…':'Sign in'}</button></div>
       <p className="mt-6 text-center text-xs text-slate-500">Firebase client configuration is public by design; private server credentials remain outside source control.</p>
     </div></div></main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<main className="grid min-h-screen place-items-center bg-slate-950 text-slate-400">Loading sign-in…</main>}>
+      <LoginPageContent />
+    </Suspense>
   );
 }
