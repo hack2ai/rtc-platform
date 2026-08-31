@@ -40,9 +40,19 @@ const isDevLanOrigin = (origin: string): boolean => {
   }
 };
 
+const isDevNgrokOrigin = (origin: string): boolean => {
+  if (ENV.NODE_ENV !== 'development') return false;
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'https:' && url.hostname.endsWith('.ngrok-free.app');
+  } catch {
+    return false;
+  }
+};
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || explicitOrigins.has(origin) || isDevLanOrigin(origin)) {
+    if (!origin || explicitOrigins.has(origin) || isDevLanOrigin(origin) || isDevNgrokOrigin(origin)) {
       callback(null, true);
       return;
     }
