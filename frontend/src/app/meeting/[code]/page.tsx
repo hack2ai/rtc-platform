@@ -349,7 +349,7 @@ export default function MeetingRoom() {
         const incomingSessionId = String(data.sessionId || '');
         if (!senderId || senderId === uid || !data.type) continue;
 
-        let state = peers.current[senderId];
+        let state: PeerState | undefined = peers.current[senderId];
         if (data.type === 'hello' && state && state.remoteSessionId && incomingSessionId && state.remoteSessionId !== incomingSessionId) {
           try { state.pc.close(); } catch { /* noop */ }
           delete peers.current[senderId];
