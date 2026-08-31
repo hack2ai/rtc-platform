@@ -5,7 +5,7 @@
 [![CI](https://github.com/hack2ai/rtc-platform/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/hack2ai/rtc-platform/actions/workflows/ci-cd.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![License](https://img.shields.io/badge/license-not%20specified-lightgrey)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 RTC Platform is a browser-based collaboration workspace for private meetings. It combines authenticated meeting rooms, real-time chat, WebRTC media, screen sharing, shared files, a collaborative workspace, moderation controls, and deployment scaffolding in one repository.
 
@@ -74,6 +74,8 @@ rtc-platform/
 ├── setup.sh
 ├── start-dev.ps1
 ├── start-dev.sh
+├── LICENSE
+├── CHANGELOG.md
 └── README.md
 ```
 
@@ -242,8 +244,12 @@ Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request. 
 
 ## Project status
 
-🚧 **Active development.** The repository has deployment, authentication, meeting, API, and collaboration scaffolding in place. WebRTC interoperability and production hardening should be validated across the specific browsers, devices, and network environments targeted by a deployment.
+🚧 **Release candidate — v1.0.0.** Core authentication, meeting, API, collaboration, and deployment scaffolding is in place. Production WebRTC interoperability should still be validated across the target browsers, devices, and network environments.
 
 ## License
 
-A project license has not yet been selected. Do not assume an open-source license is granted until a `LICENSE` file is added.
+RTC Platform is licensed under the [MIT License](LICENSE).
+
+## Release
+
+The v1.0.0 release notes are documented in [`CHANGELOG.md`](CHANGELOG.md). GitHub Releases can be published from the repository's **Releases** page using the `v1.0.0` tag.
