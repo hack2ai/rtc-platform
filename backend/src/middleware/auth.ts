@@ -18,13 +18,16 @@ export const authenticate = async (req: AuthenticatedRequest, res: Response, nex
       return;
     }
 
+    // Token verification must not perform a Firestore read. The previous
+    // implementation fetched users/{uid} on every authenticated request,
+    // which consumed Firestore read quota and could make a valid Firebase
+    // token look invalid when the database quota was exhausted.
     const decoded = await auth.verifyIdToken(token, false);
-    const userDoc = await db.collection('users').doc(decoded.uid).get();
     req.user = {
       uid: decoded.uid,
       email: decoded.email || '',
       displayName: decoded.name,
-      role: userDoc.data()?.role || 'user',
+      role: 'user',
     };
     next();
   } catch (error: any) {
@@ -49,9 +52,19 @@ export const authenticate = async (req: AuthenticatedRequest, res: Response, nex
   }
 };
 
-export const requireAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
-  if (req.user?.role !== 'admin') { sendError(res, 'Admin required', 403); return; }
-  next();
+export const requireAdmin = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const doc = await db.collection('users').doc(req.user!.uid).get();
+    if (doc.data()?.role !== 'admin') {
+      sendError(res, 'Admin required', 403);
+      return;
+    }
+    req.user!.role = 'admin';
+    next();
+  } catch (error) {
+    logger.error('Admin role lookup failed', error);
+    sendError(res, 'Unable to verify administrator role', 503);
+  }
 };
 
 export const requireHost = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
