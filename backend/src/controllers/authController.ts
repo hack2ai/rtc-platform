@@ -23,20 +23,6 @@ const defaultSettings = {
 export const register = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { uid, email, displayName } = req.user!;
   const ref = db.collection('users').doc(uid);
-  const existing = await ref.get();
-
-  if (existing.exists) {
-    await ref.set({
-      email: email || existing.data()?.email || '',
-      displayName: displayName || existing.data()?.displayName || email?.split('@')[0] || 'User',
-      isOnline: true,
-      lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    sendSuccess(res, { user: { ...existing.data(), uid, isOnline: true } }, 'Profile synchronized');
-    return;
-  }
-
   const now = admin.firestore.FieldValue.serverTimestamp();
   const user = {
     uid,
@@ -50,8 +36,29 @@ export const register = asyncHandler(async (req: AuthenticatedRequest, res: Resp
     updatedAt: now,
   };
 
-  await ref.create(user);
-  sendSuccess(res, { user }, 'Registered', 201);
+  try {
+    // create() performs a conditional write without a preceding document read.
+    // This is important on free-tier Firestore because authentication should
+    // not consume a read quota unit for every API request/login.
+    await ref.create(user);
+    sendSuccess(res, { user }, 'Registered', 201);
+    return;
+  } catch (error: any) {
+    const code = String(error?.code || '').toLowerCase();
+    const message = String(error?.message || '').toLowerCase();
+    const alreadyExists = code === '6' || code.includes('already') || message.includes('already exists');
+    if (!alreadyExists) throw error;
+  }
+
+  await ref.set({
+    email: email || '',
+    displayName: displayName || email?.split('@')[0] || 'User',
+    isOnline: true,
+    lastSeen: now,
+    updatedAt: now,
+  }, { merge: true });
+
+  sendSuccess(res, { updated: true }, 'Profile synchronized');
 });
 
 export const getProfile = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
