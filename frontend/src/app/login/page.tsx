@@ -28,7 +28,19 @@ function LoginPageContent() {
 
   const syncProfile = async () => {
     await api.post('/auth/register', {});
-    router.replace(next);
+  };
+
+  const completeLogin = async () => {
+    try {
+      await syncProfile();
+    } catch (error: any) {
+      // Firebase authentication has already succeeded. Profile synchronization
+      // should not make the user appear logged out when the backend is slow.
+      console.warn('[Auth] profile synchronization failed after successful sign-in', error);
+      toast.error('Signed in, but profile sync is taking longer than expected.');
+    } finally {
+      router.replace(next);
+    }
   };
 
   const formatAuthError = (error: any) => {
@@ -46,7 +58,7 @@ function LoginPageContent() {
     setBusy(true);
     try {
       await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
-      await syncProfile();
+      await completeLogin();
     } catch (error: any) {
       await firebaseAuth.signOut().catch(() => undefined);
       toast.error(formatAuthError(error));
@@ -57,7 +69,7 @@ function LoginPageContent() {
     setBusy(true);
     try {
       await signInWithPopup(firebaseAuth, googleProvider);
-      await syncProfile();
+      await completeLogin();
     } catch (error: any) {
       await firebaseAuth.signOut().catch(() => undefined);
       toast.error(formatAuthError(error));
