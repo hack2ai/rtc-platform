@@ -19,18 +19,12 @@ const nextConfig = {
     ],
   },
   async rewrites() {
-    return {
-      beforeFiles: [
-        // Keep existing meeting invite URLs stable while using the hardened RTC client.
-        { source: '/meeting/:code', destination: '/meeting2/:code' },
-      ],
-      afterFiles: [
-        {
-          source: '/api-proxy/:path*',
-          destination: `${process.env.API_PROXY_TARGET || 'http://127.0.0.1:8080'}/api/:path*`,
-        },
-      ],
-    };
+    return [
+      {
+        source: '/api-proxy/:path*',
+        destination: `${process.env.API_PROXY_TARGET || 'http://127.0.0.1:8080'}/api/:path*`,
+      },
+    ];
   },
   async headers() {
     return [{ source: '/(.*)', headers: [
