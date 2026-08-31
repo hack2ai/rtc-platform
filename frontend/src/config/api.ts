@@ -1,10 +1,12 @@
-import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
+import axios, { AxiosError, AxiosInstance, AxiosResponse } from 'axios';
 import { firebaseAuth } from './firebase';
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api';
-const API_URL = typeof window !== 'undefined' && window.location.protocol === 'https:'
-  ? '/api-proxy'
-  : configuredApiUrl;
+
+// Browser requests always use the Next.js same-origin proxy. This prevents
+// localhost/ngrok host mismatches and CORS failures during development while
+// keeping direct backend access available for non-browser consumers.
+const API_URL = typeof window !== 'undefined' ? '/api-proxy' : configuredApiUrl;
 
 const REQUEST_TIMEOUT_MS = 15000;
 const TOKEN_TIMEOUT_MS = 8000;
